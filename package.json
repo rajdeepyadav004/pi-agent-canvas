@@ -65,8 +65,10 @@
     "watch": "node esbuild.mjs --watch",
     "canvas": "node scripts/run-canvas.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/runTest.js",
-    "package": "npm run build && vsce package --no-dependencies"
+    "test": "npm run test:isolated && npm run test:shared",
+    "package": "npm run build && vsce package --no-dependencies",
+    "test:isolated": "node ./test/runTest.js",
+    "test:shared": "CANVAS_TEST_MODE=shared node ./test/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

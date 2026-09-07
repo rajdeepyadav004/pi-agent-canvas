@@ -24,7 +24,6 @@ export const CHROME_DEFAULTS = {
   'window.commandCenter': false, // top-center command/search box
   'workbench.layoutControl.enabled': false, // title-bar layout/chat icon cluster
   'workbench.statusBar.visible': false, // bottom bar (notifications still appear as toasts)
-  'workbench.secondarySideBar.visible': false, // right-hand panel (Chat etc.)
   'workbench.editor.showTabs': 'none', // tab strip above the editor
   'workbench.startupEditor': 'none', // no Welcome tab
   // ── VS Code 1.136 core agent/chat chrome (verified against 1.136.1) ──

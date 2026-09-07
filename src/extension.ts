@@ -41,7 +41,6 @@ const CHROME_DEFAULTS: Record<string, unknown> = {
   'workbench.layoutControl.enabled': false, // title-bar layout/chat icon cluster
   'workbench.statusBar.visible': false,
   'workbench.activityBar.location': 'hidden', // valid enum value in 1.136
-  'workbench.secondarySideBar.visible': false,
   'workbench.editor.showTabs': 'none',
   'workbench.startupEditor': 'none',
   // Core agent/chat chrome (verified against VS Code 1.136.1)
@@ -68,7 +67,6 @@ const CHROME_RESTORE: Record<string, unknown> = {
   'window.menuBarVisibility': 'classic',
   'window.commandCenter': true,
   'workbench.statusBar.visible': true,
-  'workbench.secondarySideBar.visible': true,
   'workbench.editor.showTabs': 'multiple',
   'chat.titleBar.openInAgentsWindow.enabled': true,
   'chat.titleBar.signIn.enabled': true,
@@ -143,10 +141,31 @@ async function applyChromeKiosk(context: vscode.ExtensionContext): Promise<void>
   let changedKeys: string[] = [];
   try {
     const config = vscode.workspace.getConfiguration();
+    const retry: Array<[string, unknown]> = [];
     for (const [key, value] of Object.entries(CHROME_DEFAULTS)) {
-      if (config.get(key) !== value) {
+      if (config.get(key) === value) continue;
+      try {
         await config.update(key, value, vscode.ConfigurationTarget.Global);
         changedKeys.push(key);
+      } catch (err) {
+        // Some keys are not registered yet during very early ('*') activation
+        // (e.g. workbench.secondarySideBar.visible). Never abort the loop —
+        // note the key and give it a second chance after startup settles.
+        console.warn(`[pi-agent-canvas] deferred chrome key ${key}:`, String(err).slice(0, 120));
+        retry.push([key, value]);
+      }
+    }
+    if (retry.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      for (const [key, value] of retry) {
+        try {
+          if (config.get(key) !== value) {
+            await config.update(key, value, vscode.ConfigurationTarget.Global);
+            changedKeys.push(`${key} (retry)`);
+          }
+        } catch (err) {
+          console.warn(`[pi-agent-canvas] chrome key ${key} failed after retry:`, String(err).slice(0, 120));
+        }
       }
     }
   } catch (err) {
