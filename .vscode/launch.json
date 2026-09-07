@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "CANVAS (isolated, default)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extensions",
+        "--user-data-dir=${workspaceFolder}/.vscode/.devdata",
+        "--extensions-dir=${workspaceFolder}/.vscode/.devext"
+      ],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "pre-launch (isolated)",
+      "env": {
+        "VSCODE_EXTENSION_ISOLATED": "1"
+      }
+    },
+    {
+      "name": "⚠ SHARED window (your real profile — NOT stripped)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "build"
+    }
+  ]
+}

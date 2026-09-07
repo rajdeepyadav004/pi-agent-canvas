@@ -1,0 +1,62 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "npm",
+      "script": "build",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": {
+        "owner": "esbuild",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^(.*):(\\d+):(\\d+):\\s+(error|warning):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        ]
+      }
+    },
+    {
+      "label": "watch",
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "esbuild",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*watching.*"
+        },
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^(.*):(\\d+):(\\d+):\\s+(error|warning):\\s+(.*)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        ]
+      }
+    },
+    {
+      "label": "seed-profile",
+      "type": "shell",
+      "command": "node scripts/seed-profile.mjs",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "pre-launch (isolated)",
+      "dependsOn": ["build", "seed-profile"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    }
+  ]
+}

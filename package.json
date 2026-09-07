@@ -1,0 +1,79 @@
+{
+  "name": "pi-agent-canvas",
+  "displayName": "pi-agent-canvas",
+  "description": "Minimal, clutter-free agent canvas workspace. Opens a dedicated Webview 'window' with zero IDE chrome around it.",
+  "version": "0.0.1",
+  "publisher": "pi-labs",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "piAgentCanvas.open",
+        "title": "Open Canvas Window",
+        "category": "pi-agent-canvas"
+      },
+      {
+        "command": "piAgentCanvas.toggleMinimalChrome",
+        "title": "Toggle Minimal Chrome (canvas kiosk)",
+        "category": "pi-agent-canvas"
+      },
+      {
+        "command": "piAgentCanvas.restoreChrome",
+        "title": "Restore VS Code Chrome (exit kiosk)",
+        "category": "pi-agent-canvas"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "piAgentCanvas.open",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c",
+        "when": "!webviewEditorVisible || activeWebviewPanelId != 'piAgentCanvas.canvas'"
+      },
+      {
+        "command": "piAgentCanvas.toggleMinimalChrome",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m",
+        "when": "!webviewEditorVisible || activeWebviewPanelId != 'piAgentCanvas.canvas'"
+      }
+    ],
+    "configuration": {
+      "title": "pi-agent-canvas",
+      "properties": {
+        "piAgentCanvas.focusChromeOnActivate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "In the isolated canvas dev window only: auto-hide VS Code chrome (menu bar, Welcome) on activation. Never affects your regular VS Code profile."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "canvas": "node scripts/run-canvas.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node test/runTest.js",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.21.5",
+    "mocha": "^12.0.0",
+    "typescript": "^5.5.4"
+  }
+}
