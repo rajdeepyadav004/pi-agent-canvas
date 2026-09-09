@@ -48,13 +48,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 /**
- * Isolated dev window only: make the canvas the sole content. Closes the
- * auxiliary bar (where Copilot Chat / agent sessions live) and the bottom
- * panel. These are transient UI-state commands — no settings are written,
- * the sidebar (files/extensions) stays, and the user's real windows are
- * never affected.
+ * Isolated dev window only: make the canvas the sole content. Sets
+ * chat.disableAIFeatures (the official kill switch for built-in AI/chat and
+ * the Copilot extensions) and closes the auxiliary + bottom panels. All of
+ * this is scoped to this window's throwaway profile — the user's real VS
+ * Code is never affected. The sidebar (files/extensions) stays.
  */
+const CHAT_KILL_KEY = 'chat.disableAIFeatures';
+
 async function closeChatSurfaces(): Promise<void> {
+  // The official master switch: hides built-in AI/chat UI and disables the
+  // Copilot extensions. Scoped to this window's throwaway profile via the
+  // Global target (the dev window runs with its own --user-data-dir).
+  try {
+    await vscode.workspace
+      .getConfiguration()
+      .update(CHAT_KILL_KEY, true, vscode.ConfigurationTarget.Global);
+  } catch (err) {
+    console.warn(`[pi-agent-canvas] ${CHAT_KILL_KEY} update failed:`, err);
+  }
+
   for (const command of [
     'workbench.action.closeAuxiliaryBar',
     'workbench.action.closePanel',

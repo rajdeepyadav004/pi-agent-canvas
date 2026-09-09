@@ -24,14 +24,24 @@ const KIOSK_VALUES = {
   'chat.agent.enabled': false,
 };
 
-async function assertChromeUntouched(label) {
+/** chat.disableAIFeatures is EXPECTED to be true in the isolated dev window
+ *  (the canvas kills AI/chat there), so the isolated suite exempts it. */
+async function assertChromeUntouched(label, expectedOverrides = {}) {
   for (const [key, kiosk] of Object.entries(KIOSK_VALUES)) {
     const actual = await vscode.workspace.getConfiguration().get(key);
-    assert.notStrictEqual(
-      actual,
-      kiosk,
-      `${label}: '${key}' must never be rewritten by the extension (found kiosk value ${JSON.stringify(kiosk)})`,
-    );
+    if (key in expectedOverrides) {
+      assert.strictEqual(
+        actual,
+        expectedOverrides[key],
+        `${label}: '${key}' must be ${JSON.stringify(expectedOverrides[key])} (got ${JSON.stringify(actual)})`,
+      );
+    } else {
+      assert.notStrictEqual(
+        actual,
+        kiosk,
+        `${label}: '${key}' must never be rewritten by the extension (found kiosk value ${JSON.stringify(kiosk)})`,
+      );
+    }
   }
 }
 
