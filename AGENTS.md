@@ -13,6 +13,10 @@ Check/update the current cycle there before planning or reporting status.
 | Cycle 2 | UI interface for pi dev | 2026-09-13 → 2026-09-26 | upcoming |
 
 ### Working rules
+- **Incremental build only.** This tool is created incrementally; every
+  addition (dependency, feature, abstraction, setting) must be thoughtful and
+  **earn its place**. No speculative scaffolding, no "might need later" code.
+  When in doubt, leave it out — it can always be added when it proves needed.
 - **Always anchor status to the active cycle** in Plane: when a milestone lands,
   update the cycle's description / add a work item; when starting work, confirm
   which cycle it belongs to (create a new cycle via `plane_cycle create` if none fits).
