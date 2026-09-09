@@ -19,6 +19,7 @@
  */
 'use strict';
 const path = require('node:path');
+const fs = require('node:fs');
 const { runTests } = require('@vscode/test-electron');
 
 async function main() {
@@ -35,6 +36,10 @@ async function main() {
 
   let exitCode = 0;
   try {
+    // Throwaway profile: wipe it so leftovers from earlier runs (or older
+    // extension versions) can never leak into assertions.
+    const profileDir = path.join(projectRoot, '.vscode-test', `user-data-${mode}`);
+    fs.rmSync(profileDir, { recursive: true, force: true });
     exitCode = await runTests({
       extensionDevelopmentPath: projectRoot,
       extensionTestsPath: path.join(projectRoot, 'test', 'suite', 'index.js'),
