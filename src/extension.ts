@@ -43,6 +43,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await new Promise((resolve) => setTimeout(resolve, 750));
       }
     })();
+    void closeChatSurfaces();
+  }
+}
+
+/**
+ * Isolated dev window only: make the canvas the sole content. Closes the
+ * auxiliary bar (where Copilot Chat / agent sessions live) and the bottom
+ * panel. These are transient UI-state commands — no settings are written,
+ * the sidebar (files/extensions) stays, and the user's real windows are
+ * never affected.
+ */
+async function closeChatSurfaces(): Promise<void> {
+  for (const command of [
+    'workbench.action.closeAuxiliaryBar',
+    'workbench.action.closePanel',
+  ]) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await vscode.commands.executeCommand(command);
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
   }
 }
 
