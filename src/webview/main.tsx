@@ -53,9 +53,9 @@ const styles: Record<string, React.CSSProperties> = {
   message: { maxWidth: 720, padding: '10px 14px', borderRadius: 10, lineHeight: 1.5, whiteSpace: 'pre-wrap' },
   user: { alignSelf: 'flex-end', background: '#27272a', color: '#fafafa' },
   assistant: { alignSelf: 'flex-start', background: '#18181b', border: '1px solid #27272a' },
-  composer: { display: 'flex', gap: 8, padding: '12px 32px 16px', borderTop: '1px solid #27272a' },
+  composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a' },
   input: {
-    flex: 1,
+    width: '100%',
     background: '#18181b',
     border: '1px solid #3f3f46',
     borderRadius: 8,
@@ -63,15 +63,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '8px 12px',
     font: 'inherit',
     resize: 'none',
-  },
-  button: {
-    background: '#3b82f6',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 8,
-    padding: '8px 16px',
-    font: 'inherit',
-    cursor: 'pointer',
   },
 };
 
@@ -87,8 +78,9 @@ function CanvasThread() {
         />
       </ThreadPrimitive.Viewport>
       <div style={styles.composer}>
-        <ComposerPrimitive.Input style={styles.input} rows={1} autoFocus placeholder="Message…" />
-        <ComposerPrimitive.Send style={styles.button}>Send</ComposerPrimitive.Send>
+        {/* Enter sends (assistant-ui default); Shift+Enter inserts a newline.
+            No Send button, no placeholder — the box is self-evident. */}
+        <ComposerPrimitive.Input style={styles.input} rows={1} autoFocus />
       </div>
     </ThreadPrimitive.Root>
   );
