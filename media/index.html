@@ -6,20 +6,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Canvas</title>
   <style>
-    /* pi-agent-canvas — canvas surface
-       One empty surface that fills the whole webview; the drawing layer
-       renders whatever the canvas is showing. */
+    /* pi-agent-canvas — one blank full-bleed surface. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; overflow: hidden; }
     body {
       background: #0d0e12;
       font: 13px/1.5 -apple-system, 'Segoe UI', system-ui, sans-serif;
     }
-    #surface, #draw { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    #surface { position: fixed; inset: 0; width: 100vw; height: 100vh; }
   </style>
 </head>
 <body>
-  <canvas id="draw"></canvas>
+  <div id="surface"></div>
   <script src="__SCRIPT_URI__" nonce="__NONCE__"></script>
 </body>
 </html>
