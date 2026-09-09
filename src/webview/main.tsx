@@ -77,11 +77,12 @@ function CanvasThread() {
           components={{ UserMessage, AssistantMessage }}
         />
       </ThreadPrimitive.Viewport>
-      <div style={styles.composer}>
+      {/* ComposerPrimitive.Root renders the <form> — Enter submits via it. */}
+      <ComposerPrimitive.Root style={styles.composer}>
         {/* Enter sends (assistant-ui default); Shift+Enter inserts a newline.
             No Send button, no placeholder — the box is self-evident. */}
         <ComposerPrimitive.Input style={styles.input} rows={1} autoFocus />
-      </div>
+      </ComposerPrimitive.Root>
     </ThreadPrimitive.Root>
   );
 }
@@ -116,10 +117,16 @@ if (container) {
   createRoot(container).render(<App />);
 }
 
-// Keep the host bridge alive.
+// Keep the host bridge alive + surface webview crashes in the launch log.
 try {
   const vscode = acquireVsCodeApi();
   vscode.postMessage({ type: 'ready' });
+  window.addEventListener('error', (e) =>
+    vscode.postMessage({ type: 'webview-error', payload: String(e.error ?? e.message) }),
+  );
+  window.addEventListener('unhandledrejection', (e) =>
+    vscode.postMessage({ type: 'webview-error', payload: String(e.reason) }),
+  );
 } catch {
   /* running outside VS Code (e.g. plain browser) — fine */
 }

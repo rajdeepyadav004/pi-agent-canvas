@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -85,6 +85,9 @@ export class CanvasPanel {
    * This switch grows as the real canvas features land.
    */
   private async handleMessage(msg: unknown): Promise<void> {
+    try {
+      appendFileSync('/tmp/canvas-bridge.log', `${new Date().toISOString()} ${JSON.stringify(msg)}\n`);
+    } catch { /* diagnostics only */ }
     const message = msg as { type?: string; [k: string]: unknown };
     switch (message.type) {
       case 'ping': {
@@ -97,6 +100,14 @@ export class CanvasPanel {
             chrome: readChromeSettings(),
           },
         });
+        break;
+      }
+      case 'webview-error': {
+        console.error('[pi-agent-canvas] webview error:', message.payload);
+        break;
+      }
+      case 'ready': {
+        console.log('[pi-agent-canvas] webview ready');
         break;
       }
       default: {
