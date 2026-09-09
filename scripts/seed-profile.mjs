@@ -57,6 +57,10 @@ for (const key of LEGACY_CHROME_KEYS) {
   }
 }
 
+// Disable built-in AI/chat BEFORE the window launches, so no chat UI ever
+// appears (no startup flash). Scoped to this throwaway dev profile only.
+merged['chat.disableAIFeatures'] = true;
+
 writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + '\n', 'utf8');
 console.log(
   `[seed-profile] profile ok — ${removed} legacy chrome key(s) pruned, ` +

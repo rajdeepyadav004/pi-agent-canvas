@@ -41,7 +41,8 @@
     "test": "npm run test:isolated && npm run test:shared",
     "package": "npm run build && vsce package --no-dependencies",
     "test:isolated": "node ./test/runTest.js",
-    "test:shared": "CANVAS_TEST_MODE=shared node ./test/runTest.js"
+    "test:shared": "CANVAS_TEST_MODE=shared node ./test/runTest.js",
+    "precanvas": "node scripts/seed-profile.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
