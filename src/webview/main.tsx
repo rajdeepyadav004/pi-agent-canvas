@@ -39,7 +39,7 @@ const EchoAdapter: ChatModelAdapter = {
       yield { content: [{ type: 'text', text: sent }] };
       await new Promise((r) => setTimeout(r, 15));
     }
-    yield { content: [{ type: 'text', text: reply }], status: { reason: 'stop' } };
+    yield { content: [{ type: 'text', text: reply }], status: { type: 'complete', reason: 'stop' } };
   },
 };
 
@@ -95,6 +95,7 @@ const UserMessage = () => (
 const AssistantMessage = () => (
   <MessagePrimitive.Root style={{ ...styles.message, ...styles.assistant }}>
     <MessagePrimitive.Parts />
+    <MessagePrimitive.Error style={{ color: '#f87171', marginTop: 6 }} />
   </MessagePrimitive.Root>
 );
 
