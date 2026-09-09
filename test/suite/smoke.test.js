@@ -6,7 +6,7 @@
 'use strict';
 const assert = require('node:assert');
 const vscode = require('vscode');
-const { assertChromeUntouched } = require('./chromeSafety.js');
+const { assertChromeUntouched, AI_FEATURES_OFF } = require('./chromeSafety.js');
 
 const mode = process.env.CANVAS_TEST_MODE || 'isolated';
 const suite = mode === 'isolated' ? describe : describe.skip;
@@ -32,7 +32,7 @@ suite('pi-agent-canvas (isolated dev window)', function () {
 
   it('extension is loaded and NO chrome setting was touched', async () => {
     assert.ok(vscode.extensions.getExtension('pi-labs.pi-agent-canvas'), 'extension should be loaded');
-    await assertChromeUntouched('isolated dev window', { 'chat.disableAIFeatures': true });
+    await assertChromeUntouched('isolated dev window', AI_FEATURES_OFF);
   });
 
   it('opens exactly one canvas panel tab (singleton)', async () => {

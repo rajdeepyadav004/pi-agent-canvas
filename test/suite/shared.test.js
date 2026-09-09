@@ -7,7 +7,7 @@
 'use strict';
 const assert = require('node:assert');
 const vscode = require('vscode');
-const { assertChromeUntouched } = require('./chromeSafety.js');
+const { assertChromeUntouched, AI_FEATURES_OFF } = require('./chromeSafety.js');
 
 const mode = process.env.CANVAS_TEST_MODE || 'isolated';
 const suite = mode === 'shared' ? describe : describe.skip;
@@ -33,14 +33,14 @@ suite('pi-agent-canvas (normal window — perfect guest)', function () {
   });
 
   it('chrome settings untouched before any user action', async () => {
-    await assertChromeUntouched('normal window, before open');
+    await assertChromeUntouched('normal window, before open', AI_FEATURES_OFF);
   });
 
   it('chrome settings STILL untouched after the user opens the canvas', async () => {
     await vscode.commands.executeCommand(OPEN_COMMAND);
     await sleep(1200);
     assert.strictEqual(findCanvasTabs().length, 1, 'explicit open should work in a normal window');
-    await assertChromeUntouched('normal window, after open');
+    await assertChromeUntouched('normal window, after open', AI_FEATURES_OFF);
   });
 
   it('canvas closes cleanly and chrome is still untouched', async () => {
@@ -48,6 +48,6 @@ suite('pi-agent-canvas (normal window — perfect guest)', function () {
     await vscode.window.tabGroups.close(tabs[0].group);
     await sleep(500);
     assert.strictEqual(findCanvasTabs().length, 0, 'canvas should close cleanly');
-    await assertChromeUntouched('normal window, after close');
+    await assertChromeUntouched('normal window, after close', AI_FEATURES_OFF);
   });
 });

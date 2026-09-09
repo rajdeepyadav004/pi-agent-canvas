@@ -12,15 +12,30 @@ import { CanvasPanel } from './canvasPanel';
  * flagged by VSCODE_EXTENSION_ISOLATED=1 and a throwaway profile) the canvas
  * auto-opens so the dev window is ready to use.
  *
- * In every other window — the user's real VS Code — the only things this
- * extension does are:
+ * In every other window — the user's real VS Code — the extension does:
  *   - provide the `piAgentCanvas.open` command (Ctrl/Cmd+Alt+C)
  *   - show the canvas when the user explicitly asks for it
+ *   - set `chat.disableAIFeatures: true` (once, idempotent): the canvas is
+ *     an agent-free surface, so the built-in AI/chat UI and Copilot
+ *     extensions are switched off in the user's VS Code by design.
  */
 
 const ISOLATED = process.env.VSCODE_EXTENSION_ISOLATED === '1';
 
+/** Idempotently disable built-in AI/chat in whatever window we run in. */
+async function disableAiFeatures(): Promise<void> {
+  try {
+    const config = vscode.workspace.getConfiguration();
+    if (config.get(CHAT_KILL_KEY) === true) return; // already off — no write
+    await config.update(CHAT_KILL_KEY, true, vscode.ConfigurationTarget.Global);
+  } catch (err) {
+    console.warn(`[pi-agent-canvas] ${CHAT_KILL_KEY} update failed:`, err);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  void disableAiFeatures();
+
   context.subscriptions.push(
     vscode.commands.registerCommand('piAgentCanvas.open', () => {
       CanvasPanel.createOrShow(context.extensionUri);

@@ -24,8 +24,9 @@ const KIOSK_VALUES = {
   'chat.agent.enabled': false,
 };
 
-/** chat.disableAIFeatures is EXPECTED to be true in the isolated dev window
- *  (the canvas kills AI/chat there), so the isolated suite exempts it. */
+/** The extension EXPECTEDLY writes chat.disableAIFeatures:true in every
+ *  window (by design — the canvas is agent-free), so both suites assert it. */
+const AI_FEATURES_OFF = { 'chat.disableAIFeatures': true };
 async function assertChromeUntouched(label, expectedOverrides = {}) {
   for (const [key, kiosk] of Object.entries(KIOSK_VALUES)) {
     const actual = await vscode.workspace.getConfiguration().get(key);
@@ -45,4 +46,4 @@ async function assertChromeUntouched(label, expectedOverrides = {}) {
   }
 }
 
-module.exports = { assertChromeUntouched, KIOSK_VALUES };
+module.exports = { assertChromeUntouched, KIOSK_VALUES, AI_FEATURES_OFF };
