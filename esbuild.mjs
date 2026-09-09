@@ -15,7 +15,7 @@ import { dirname } from 'node:path';
 const root = dirname(fileURLToPath(import.meta.url));
 const watch = process.argv.includes('--watch');
 
-const options = {
+const extensionOptions = {
   entryPoints: { extension: 'src/extension.ts' },
   outfile: 'dist/extension.js',
   bundle: true,
@@ -27,11 +27,26 @@ const options = {
   logLevel: 'info',
 };
 
+const webviewOptions = {
+  entryPoints: { webview: 'src/webview/main.tsx' },
+  outfile: 'dist/webview.js',
+  bundle: true,
+  platform: 'browser',
+  format: 'iife',
+  target: 'es2022',
+  jsx: 'automatic',
+  sourcemap: false,
+  logLevel: 'info',
+};
+
 if (watch) {
-  const ctx = await esbuild.context(options);
-  await ctx.watch();
-  console.log('[esbuild] watching src/ → dist/extension.js');
+  const [extCtx, webCtx] = await Promise.all([
+    esbuild.context(extensionOptions),
+    esbuild.context(webviewOptions),
+  ]);
+  await Promise.all([extCtx.watch(), webCtx.watch()]);
+  console.log('[esbuild] watching src/ → dist/');
 } else {
-  await esbuild.build(options);
-  console.log('[esbuild] build complete → dist/extension.js');
+  await Promise.all([esbuild.build(extensionOptions), esbuild.build(webviewOptions)]);
+  console.log('[esbuild] build complete → dist/');
 }

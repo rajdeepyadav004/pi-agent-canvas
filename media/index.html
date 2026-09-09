@@ -6,18 +6,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Agent Canvas</title>
   <style>
-    /* pi-agent-canvas — one blank full-bleed surface. */
+    /* pi-agent-canvas — canvas surface hosting the assistant-ui thread. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; overflow: hidden; }
     body {
       background: #0d0e12;
       font: 13px/1.5 -apple-system, 'Segoe UI', system-ui, sans-serif;
     }
-    #surface { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    #root { position: fixed; inset: 0; width: 100vw; height: 100vh; }
   </style>
 </head>
 <body>
-  <div id="surface"></div>
+  <div id="root"></div>
   <script src="__SCRIPT_URI__" nonce="__NONCE__"></script>
 </body>
 </html>

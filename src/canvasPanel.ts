@@ -32,7 +32,7 @@ export class CanvasPanel {
         enableScripts: true,
         retainContextWhenHidden: true,
         // Only the media/ folder is reachable from inside the webview.
-        localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')],
+        localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media'), vscode.Uri.joinPath(extensionUri, 'dist')],
       },
     );
 
@@ -63,7 +63,7 @@ export class CanvasPanel {
     const nonce = getNonce();
     const cspSource = this.panel.webview.cspSource;
     const scriptUri = this.panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, 'media', 'index.js'),
+      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview.js'),
     );
 
     const csp = [
