@@ -11,6 +11,7 @@ Check/update the current cycle there before planning or reporting status.
 |---|---|---|---|
 | Cycle 1 | Blank canvas window | 2026-09-09 → 2026-09-12 | **~50% done** — extension, chat removal, tests committed (`0470d6b`); remaining: GitHub push + packaging (publisher, icon, vsce) |
 | Cycle 2 | UI interface for pi dev | 2026-09-13 → 2026-09-26 | **complete** — canvas is a live pi cockpit: assistant-ui thread ⇄ pi-canvas-server (per-window WebSocket, SDK session outside VS Code because ext-host fetch patching stalls SSE), markdown + code + tool cards, edit diffs (unified/split), thinking cue, abort control, on-disk sessions replayed on connect. Remaining (backlog): start-a-new-conversation UI; Cycle 1 leftovers: .vsix packaging |
+| Cycle 3 | Session tiles & editor integration | 2026-09-27 → 2026-10-10 | **in progress** — foundation landed (da9d0a0): pi-canvas-server is a multi-session host (registry keyed by pi session id, one prompt queue per session, every event stamped with `sessionId`, `open_session`/`list_sessions`/`close_session`) and file references render as tiles that open in the editor (`openFile` bridge → `showTextDocument` with `preview: true`, reusing the tab). Next: one editor tab per session, then a session switcher (see Plane). |
 
 ### Working rules
 - **Incremental build only.** This tool is created incrementally; every
