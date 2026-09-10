@@ -10,7 +10,7 @@ Check/update the current cycle there before planning or reporting status.
 | Cycle | Name | Window | Status |
 |---|---|---|---|
 | Cycle 1 | Blank canvas window | 2026-09-09 → 2026-09-12 | **~50% done** — extension, chat removal, tests committed (`0470d6b`); remaining: GitHub push + packaging (publisher, icon, vsce) |
-| Cycle 2 | UI interface for pi dev | 2026-09-13 → 2026-09-26 | **in progress** — live pi chat shipped: assistant-ui webview ⇄ pi-canvas-server (ws://127.0.0.1:47811, SDK session outside VS Code — ext-host fetch patching stalls SSE). Remaining: markdown/tool-call rendering, abort+thinking cue, session persistence (see Plane) |
+| Cycle 2 | UI interface for pi dev | 2026-09-13 → 2026-09-26 | **complete** — canvas is a live pi cockpit: assistant-ui thread ⇄ pi-canvas-server (per-window WebSocket, SDK session outside VS Code because ext-host fetch patching stalls SSE), markdown + code + tool cards, edit diffs (unified/split), thinking cue, abort control, on-disk sessions replayed on connect. Remaining (backlog): start-a-new-conversation UI; Cycle 1 leftovers: .vsix packaging |
 
 ### Working rules
 - **Incremental build only.** This tool is created incrementally; every
