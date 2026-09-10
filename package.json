@@ -2,7 +2,7 @@
   "name": "pi-agent-canvas",
   "displayName": "Pi Agent Canvas",
   "description": "A dedicated cockpit for the pi coding agent: conversations as editor tiles, files it touches opening in the editor, and a session list in the activity bar.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "rajdeepyadav004",
   "license": "MIT",
   "engines": {
@@ -20,7 +20,8 @@
     "onCommand:piAgentCanvas.open",
     "onCommand:piAgentCanvas.newSession",
     "onCommand:piAgentCanvas.openSession",
-    "onCommand:piAgentCanvas.refreshSessions"
+    "onCommand:piAgentCanvas.refreshSessions",
+    "onCommand:piAgentCanvas.diagnostics"
   ],
   "contributes": {
     "commands": [
@@ -45,6 +46,11 @@
         "title": "Refresh Sessions",
         "category": "pi-agent-canvas",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "piAgentCanvas.diagnostics",
+        "title": "Run Diagnostics (agent not replying?)",
+        "category": "pi-agent-canvas"
       }
     ],
     "keybindings": [

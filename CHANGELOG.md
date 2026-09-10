@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-09-10
+
+### Added
+
+- **Run Diagnostics (agent not replying?)** — a command that starts the same
+  agent server the canvas uses, in a terminal, sends a prompt and prints a
+  verdict: replied / failed with the reason / hung with the last event it saw.
+  It also prints the environment that matters (node version and path, platform,
+  proxy variables, pi config location), so a machine that cannot reach the model
+  says so without the UI being involved at all.
+- The server now logs which Node.js binary is running it. A VS Code launched
+  from the macOS Dock often cannot see nvm or Homebrew paths, and this makes
+  that visible in the log instead of silently using a different runtime.
+
 ## [0.1.1] — 2026-09-10
 
 Fixes the reason "the agent isn't replying" gave you nothing to go on.
@@ -32,6 +46,7 @@ Fixes the reason "the agent isn't replying" gave you nothing to go on.
   that piped it has gone away.
 
 [0.1.1]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.1.1
+[0.1.2]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.1.2
 
 ## [0.1.0] — 2026-09-10
 

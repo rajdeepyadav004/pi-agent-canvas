@@ -127,6 +127,33 @@ reply, diffs, abort, session replay, file chips).
 └── test/suite/            # chrome-safety + integration suites
 ```
 
+## Troubleshooting: the agent isn't replying
+
+Two things to check, in order.
+
+**1. Run the diagnostics command.** *Pi Agent Canvas: Run Diagnostics (agent not
+replying?)* opens a terminal and starts the same agent server the canvas starts,
+sends a prompt, and prints a verdict — replied, failed with the reason, or hung
+with the last event it saw. It also prints the details that differ between
+machines: the Node.js version and path, the platform, proxy variables and where
+pi keeps its config. Because it drives the server directly, it works even when
+the canvas shows nothing at all.
+
+**2. Read the log.** *View → Output → Pi Agent Canvas* carries the agent
+server's own stdout/stderr, webview crashes, the resolved pi SDK path, the
+working directory, the port and `PATH`.
+
+The most common causes:
+
+| Symptom | Cause |
+| --- | --- |
+| Diagnostics says *"No API key found for the selected model"* | That machine has never logged into pi. Run `pi` in a terminal and use `/login`. The canvas shares pi's credentials. |
+| Diagnostics cannot start the server, or the log shows `spawn node ENOENT` | VS Code cannot find `node`. On macOS, a VS Code launched from the Dock does not inherit your shell's `PATH`, so nvm/Homebrew-installed Node is invisible. Launch it from a terminal, or fix `PATH` for GUI apps. |
+| Diagnostics says *HUNG* with no reply | The model request never completed — a network, VPN or proxy problem. A child process inherits VS Code's proxy environment; compare the proxy variables the diagnostics print. |
+
+The canvas needs **no** machine-specific configuration: everything is relative to
+the extension or passed in explicitly.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE). Bundled and vendored third-party packages are

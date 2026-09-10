@@ -318,6 +318,7 @@ async function handle(ws, data) {
 }
 
 httpServer.listen(PORT, '127.0.0.1', () => {
+  console.log(`[pi-canvas-server] node ${process.version} (${process.execPath})`);
   console.log(`[pi-canvas-server] listening on ws://127.0.0.1:${PORT} (cwd: ${CWD})`);
   console.log(`[pi-canvas-server] session dir: ${SESSION_DIR ?? '(pi default)'}`);
 });

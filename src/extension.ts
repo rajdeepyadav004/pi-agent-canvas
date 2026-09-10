@@ -89,6 +89,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<PiCanv
     }),
     vscode.commands.registerCommand('piAgentCanvas.openSession', (sessionId: string) => openSession(sessionId)),
     vscode.commands.registerCommand('piAgentCanvas.refreshSessions', () => sessions.refresh()),
+    // The support path for "the agent isn't replying": run the same server the
+    // canvas runs, in a terminal, and print a verdict. Works without the UI.
+    vscode.commands.registerCommand('piAgentCanvas.diagnostics', () => {
+      const directory = join(__dirname, '..');
+      const script = join(directory, 'scripts', 'diagnose.mjs');
+      log('running diagnostics in a terminal');
+      const terminal = vscode.window.createTerminal({ name: 'Pi Agent Canvas Diagnostics', cwd: directory });
+      terminal.show();
+      terminal.sendText(`node "${script}"`);
+    }),
   );
 
   // The server needs a few seconds to boot (model runtime + session index), so
