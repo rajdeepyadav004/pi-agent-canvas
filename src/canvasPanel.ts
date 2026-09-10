@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { log, showLog } from './log';
 
 /**
  * Canvas panels — one conversation per editor panel, so sessions arrange like
@@ -202,6 +203,15 @@ export class CanvasPanel {
         // First news of a new conversation's id: re-key so the sidebar's
         // "open session" now reveals this panel, and label the tab after it.
         if (typeof message.sessionId === 'string') this.bindSession(message.sessionId);
+        break;
+      }
+      case 'webview-error': {
+        // The webview can crash where nobody is looking; put it in the log.
+        log(`[webview] ${String(message.payload ?? message)}`);
+        break;
+      }
+      case 'openLogs': {
+        showLog();
         break;
       }
       case 'ping': {

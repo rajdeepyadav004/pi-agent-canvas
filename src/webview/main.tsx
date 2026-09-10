@@ -26,6 +26,7 @@ import { MarkdownTextPrimitive, type CodeHeaderProps } from '@assistant-ui/react
 import remarkGfm from 'remark-gfm';
 import { DiffView, DiffModeEnum } from '@git-diff-view/react';
 import diffusionCss from '@git-diff-view/react/styles/diff-view.css';
+import { explainError } from '../shared/explain';
 
 // ---------------------------------------------------------------------------
 // pi transport: direct WebSocket to pi-canvas-server.
@@ -389,6 +390,11 @@ const uiCss = `
 }
 .canvas-stop:hover { background: #3f3f46; }
 .canvas-stop-glyph { width: 8px; height: 8px; background: #f87171; border-radius: 2px; }
+.canvas-link {
+  flex: none; background: none; border: 0; padding: 0; font: inherit;
+  color: #fca5a5; cursor: pointer; text-decoration: underline;
+}
+.canvas-link:hover { color: #fecaca; }
 `;
 
 // Markdown styling for assistant text. Scoped to .canvas-md so it can't leak
@@ -689,6 +695,37 @@ const styles: Record<string, React.CSSProperties> = {
   assistant: { alignSelf: 'stretch', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal', minWidth: 0, maxWidth: '100%' },
   composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a', display: 'flex', alignItems: 'center', gap: 8 },
   connecting: { color: '#8b8b94', fontFamily: Mono, fontSize: 12, padding: 24 },
+  errorBanner: {
+    display: 'flex', alignItems: 'flex-start', gap: 10,
+    margin: '0 32px 4px', padding: '8px 12px',
+    background: '#2a1518', border: '1px solid #7f1d1d', borderRadius: 8,
+    color: '#fecaca', fontSize: 12, lineHeight: 1.5,
+  },
+};
+
+/**
+ * A failure the user must see. Set from `server_error`; cleared as soon as the
+ * agent shows any sign of life again, so a transient failure does not linger.
+ */
+const CanvasErrorContext = React.createContext<{
+  error: string | null;
+  setError: (message: string | null) => void;
+}>({ error: null, setError: () => {} });
+
+const ErrorBanner = () => {
+  const { error, setError } = React.useContext(CanvasErrorContext);
+  if (!error) return null;
+  return (
+    <div style={styles.errorBanner}>
+      <span style={{ flex: 1, whiteSpace: 'pre-wrap' }}>{error}</span>
+      <button type="button" className="canvas-link" onClick={() => vsapi().postMessage({ type: 'openLogs' })}>
+        show logs
+      </button>
+      <button type="button" className="canvas-link" onClick={() => setError(null)} title="Dismiss">
+        dismiss
+      </button>
+    </div>
+  );
 };
 
 function CanvasThread() {
@@ -700,6 +737,7 @@ function CanvasThread() {
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
       </ThreadPrimitive.Viewport>
+      <ErrorBanner />
       {/* ComposerPrimitive.Root renders the <form> — Enter submits via it. */}
       <ComposerPrimitive.Root style={styles.composer}>
         <ComposerPrimitive.Input className="canvas-input" rows={1} autoFocus />
@@ -757,6 +795,19 @@ function StopButton() {
 // remounts it if the server restarts and replays a (possibly different)
 // session.
 // ---------------------------------------------------------------------------
+/**
+ * Shown until the first session replay. It renders the error banner too: a
+ * failure that happens *before* hydration (an unreachable server, a session
+ * that no longer exists) would otherwise leave this screen spinning with no
+ * explanation, which is exactly how "the agent isn't replying" used to feel.
+ */
+const Connecting = () => (
+  <div style={styles.connecting}>
+    <div>Connecting to pi…</div>
+    <ErrorBanner />
+  </div>
+);
+
 function CanvasRuntime({ initialMessages }: { initialMessages: readonly ThreadMessageLike[] }) {
   const runtime = useLocalRuntime(PiAdapter, { initialMessages });
   return (
@@ -768,9 +819,18 @@ function CanvasRuntime({ initialMessages }: { initialMessages: readonly ThreadMe
 
 function App() {
   const [initial, setInitial] = React.useState<ThreadMessageLike[] | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     const listener = (event: PiEvent) => {
+      // Any sign of an agent that is alive clears a previous failure.
+      if (event.type === 'server_error') {
+        setError(explainError(String(event.error ?? 'unknown error')));
+        return;
+      }
+      if (event.type === 'message_update' || event.type === 'tool_execution_start' || event.type === 'session_opened') {
+        setError(null);
+      }
       if (event.type !== 'session_opened') return;
       // Hydrate once, from the first replay. Later replays (a reconnect) must
       // not rebuild the runtime: remounting throws away the thread and any
@@ -783,8 +843,11 @@ function App() {
 
   // No agent without the server, so waiting for the first replay is honest —
   // and it means every prompt is typed into the runtime that owns the history.
-  if (initial === null) return <div style={styles.connecting}>Connecting to pi…</div>;
-  return <CanvasRuntime initialMessages={initial} />;
+  return (
+    <CanvasErrorContext.Provider value={{ error, setError }}>
+      {initial === null ? <Connecting /> : <CanvasRuntime initialMessages={initial} />}
+    </CanvasErrorContext.Provider>
+  );
 }
 
 // Acquire the VS Code API exactly once (a second acquire throws).

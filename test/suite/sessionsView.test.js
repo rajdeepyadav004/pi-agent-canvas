@@ -143,6 +143,32 @@ suite('pi-agent-canvas sessions view', function () {
     );
   });
 
+  it('carries the agent server\'s output into the log (the "no reply" diagnostic)', async () => {
+    // The server used to run with stdio 'ignore', so failures were invisible and
+    // a user whose agent would not reply had nothing to look at. These lines can
+    // only appear if its stdout/stderr actually reaches the log channel.
+    await waitFor(
+      () => api.recentLogs().some((line) => /pi SDK:/.test(line)) &&
+            api.recentLogs().some((line) => /listening on ws:\/\//.test(line)),
+      20_000,
+      'the server startup lines to reach the log',
+    );
+    const logs = api.recentLogs();
+    assert.ok(logs.some((l) => /pi SDK:/.test(l)), `no SDK line in log:\n${logs.join('\n')}`);
+    assert.ok(logs.some((l) => /listening on ws:\/\//.test(l)), `no listen line in log:\n${logs.join('\n')}`);
+  });
+
+  it('refuses a session that no longer exists instead of hanging on it', async () => {
+    const before = canvasTabs().length;
+    await api.openSession('00000000-0000-0000-0000-000000000000');
+    await sleep(1000);
+    assert.strictEqual(
+      canvasTabs().length,
+      before,
+      'a stale session row must not open a panel that can never load',
+    );
+  });
+
   it('gives a new session its own panel', async () => {
     const before = canvasTabs().length;
     await vscode.commands.executeCommand('piAgentCanvas.newSession');

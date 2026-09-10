@@ -244,7 +244,20 @@ try {
       void container;
     }
   }
-  if (process.env.E2E_SHOT) {
+  // Failure visibility: when the agent cannot reply, the reason must be on
+  // screen (this is the "sessions load but nothing replies" case).
+  if (process.env.E2E_EXPECT_ERROR) {
+    let seen = '';
+    for (let i = 0; i < 90; i++) {
+      await window.waitForTimeout(1000);
+      seen = await frame.locator('body').innerText();
+      if (new RegExp(process.env.E2E_EXPECT_ERROR, 'i').test(seen)) break;
+    }
+    result.errorBannerSeen = new RegExp(process.env.E2E_EXPECT_ERROR, 'i').test(seen);
+    result.errorText = seen.slice(0, 500);
+    if (process.env.E2E_SHOT) await window.screenshot({ path: process.env.E2E_SHOT });
+  }
+  if (process.env.E2E_SHOT && !process.env.E2E_EXPECT_ERROR) {
     await window.screenshot({ path: process.env.E2E_SHOT });
     console.log('screenshot saved', process.env.E2E_SHOT);
   }

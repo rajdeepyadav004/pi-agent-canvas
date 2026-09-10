@@ -39,6 +39,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 
+// This process is spawned detached and can outlive the extension host that
+// piped its output. Writing to the now-closed pipe raises EPIPE, which would
+// otherwise kill the agent mid-turn.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', () => {});
+}
+
 const PORT = Number(process.env.PI_CANVAS_PORT ?? 47811);
 // The project the agent works in — the VS Code workspace folder, passed by the
 // extension. Falls back to the process cwd when started by hand.
@@ -264,6 +271,7 @@ async function handle(ws, data) {
           history: historyOf(entry.manager),
         });
       } catch (err) {
+        console.error('[pi-canvas-server] open_session failed:', String(err));
         reply(ws, { type: 'server_error', error: String(err) });
       }
       return;

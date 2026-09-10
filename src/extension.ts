@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs';
 import { get } from 'node:http';
 import { join } from 'node:path';
 import { CanvasPanel } from './canvasPanel';
+import { initLog, log, pipeToLog, recentLogs, showLog } from './log';
+import { explainError } from './shared/explain';
 import { SessionsTreeProvider, type SessionSummary } from './sessionsView';
 
 /**
@@ -50,6 +52,7 @@ const wsUrl = () => `ws://127.0.0.1:${PI_PORT}`;
 
 export async function activate(context: vscode.ExtensionContext): Promise<PiCanvasApi> {
   extensionUri = context.extensionUri;
+  context.subscriptions.push(initLog());
   void applyAiPreference(context);
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -117,6 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<PiCanv
     sessions: fetchSessions,
     openSession,
     openCanvas,
+    recentLogs,
   };
 }
 
@@ -150,15 +154,26 @@ async function openCanvas(): Promise<void> {
   sessionsProvider?.refreshSoon();
 }
 
-/** Open one specific conversation (a row in the Sessions view). */
+/**
+ * Open one specific conversation (a row in the Sessions view).
+ *
+ * A row can be stale — the session file may have been deleted or moved on
+ * another machine — and opening a panel for it would park the canvas on
+ * "Connecting to pi…" forever, because the server can never hand back that
+ * session. Say so and refresh the list instead.
+ */
 async function openSession(sessionId: string): Promise<void> {
   const summary = await fetchSessions()
     .then((all) => all.find((s) => s.id === sessionId))
     .catch(() => undefined);
-  await CanvasPanel.open(extensionUri, wsUrl(), {
-    sessionId,
-    title: summary ? titleFor(summary) : undefined,
-  });
+  if (!summary) {
+    sessionsProvider?.refresh();
+    void vscode.window.showWarningMessage(
+      `Pi Agent Canvas: that conversation is no longer on disk (session ${sessionId.slice(0, 8)}). The list has been refreshed.`,
+    );
+    return;
+  }
+  await CanvasPanel.open(extensionUri, wsUrl(), { sessionId, title: titleFor(summary) });
   sessionsProvider?.refreshSoon();
 }
 
@@ -223,6 +238,10 @@ function startPiServer(): void {
   // process's environment (see scripts/pi-server.mjs); sessions otherwise live
   // in pi's own session directory, so the canvas and `pi --continue` agree.
   const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  log(`starting agent server: node ${serverPath}`);
+  log(`  port ${PI_PORT} · cwd ${workspaceCwd ?? '(none — the extension folder)'} · node ${process.version}`);
+  log(`  PATH ${process.env.PATH ?? '(unset)'}`);
+
   const child = spawn('node', [serverPath], {
     cwd: join(__dirname, '..'),
     env: {
@@ -231,11 +250,28 @@ function startPiServer(): void {
       ...(workspaceCwd ? { PI_CANVAS_CWD: workspaceCwd } : {}),
     },
     detached: true,
-    stdio: 'ignore',
+    // Piped, not ignored: without this the server's errors are invisible and
+    // "the agent isn't replying" has no explanation anywhere.
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.unref();
   serverProc = child;
-  child.on('error', () => { serverProc = undefined; });
+  pipeToLog(child.stdout, '[server]');
+  pipeToLog(child.stderr, '[server]');
+
+  // A failed spawn is otherwise silent: on macOS a Dock-launched VS Code often
+  // has no nvm/Homebrew PATH, so `node` simply isn't there.
+  child.on('error', (err) => {
+    serverProc = undefined;
+    log(`agent server could not start: ${err.message}`);
+    void vscode.window
+      .showErrorMessage(`Pi Agent Canvas: ${explainError(String(err.message))}`, 'Show Log')
+      .then((choice) => { if (choice === 'Show Log') showLog(); });
+  });
+  child.on('exit', (code, signal) => {
+    if (serverProc === child) serverProc = undefined;
+    if (code !== 0 && code !== null) log(`agent server exited with code ${code}${signal ? ` (${signal})` : ''}`);
+  });
 }
 
 /** Wait for the server to answer, up to `timeoutMs`. True if it did. */
@@ -356,4 +392,6 @@ export interface PiCanvasApi {
   sessions(): Promise<SessionSummary[]>;
   openSession(sessionId: string): Promise<void>;
   openCanvas(): Promise<void>;
+  /** Recent log lines, including the agent server's own stdout/stderr. */
+  recentLogs(): string[];
 }
