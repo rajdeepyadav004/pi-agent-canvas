@@ -9,8 +9,21 @@
  */
 import { _electron } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 
 const root = new URL('..', import.meta.url).pathname;
+
+// A port unique to this run. Left-over detached servers from earlier runs
+// otherwise stay bound and the next run silently talks to a stale agent.
+const PORT = process.env.E2E_PORT ?? String(48120 + Math.floor(Math.random() * 700));
+// Tear down this run's server on exit (only the pid bound to OUR port).
+process.on('exit', () => {
+  try {
+    const out = execSync(`ss -ltnp 2>/dev/null | grep ':${PORT} ' || true`).toString();
+    const pid = out.match(/pid=(\d+)/)?.[1];
+    if (pid) process.kill(Number(pid), 'SIGTERM');
+  } catch { /* best effort */ }
+});
 const result = { launched: false, frameFound: false, sent: false, replySeen: false, error: null };
 
 // The extension host's @vscode/proxy-agent patch is known to stall SSE
@@ -19,7 +32,7 @@ const profileDir = `${root}.vscode-test/user-data-e2e`;
 mkdirSync(`${profileDir}/User`, { recursive: true });
 writeFileSync(
   `${profileDir}/User/settings.json`,
-  JSON.stringify({ 'http.proxySupport': 'off' }, null, 2),
+  JSON.stringify({ 'http.proxySupport': 'off', 'notifications.doNotDisturbMode': true }, null, 2),
 );
 
 try {
@@ -33,7 +46,13 @@ try {
       '--extensions-dir=' + `${root}.vscode-test/extensions-e2e`,
       '--disable-workspace-trust',
     ],
-    env: { ...process.env, VSCODE_EXTENSION_ISOLATED: '1' },
+    // Dedicated port so an already-running canvas window can't interfere (and
+    // so the test can never attach to someone else's agent).
+    env: {
+      ...process.env,
+      VSCODE_EXTENSION_ISOLATED: '1',
+      PI_CANVAS_PORT: PORT,
+    },
   });
   result.launched = true;
 
@@ -50,18 +69,32 @@ try {
   if (!frame) throw new Error('canvas webview frame not found');
   result.frameFound = true;
 
+  // VS Code pops toasts ("Extensions are temporarily disabled") that sit on top
+  // of the composer and swallow clicks; clear them before interacting.
+  const dismissToasts = async () => {
+    try {
+      for (const c of await window.locator('.notifications-toasts .codicon-close').all()) {
+        await c.click({ force: true }).catch(() => {});
+      }
+    } catch { /* window closing */ }
+  };
+  const toastSweeper = setInterval(() => void dismissToasts(), 1000);
+
   const input = frame.locator('textarea').first();
   await input.waitFor({ state: 'visible', timeout: 30_000 });
-  await input.click();
+  await input.click({ force: true });
   const PROMPT = process.env.E2E_PROMPT ?? 'Reply with exactly: E2E-BRIDGE-OK';
   const EXPECT = process.env.E2E_EXPECT ?? 'E2E-BRIDGE-OK';
   await input.fill(PROMPT);
   await input.press('Enter');
   result.sent = true;
 
+  // In abort mode we never wait for the reply — the turn is interrupted on
+  // purpose, so that wait loop would just burn its full timeout first.
+  const abortMode = Boolean(process.env.E2E_ABORT);
   // Wait for the assistant reply to stream in.
   let body = '';
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 200 && !abortMode; i++) {  // eslint-disable-line
     await window.waitForTimeout(1000);
     body = await frame.locator('body').innerText();
     if (new RegExp(EXPECT).test(body)) break;
@@ -71,6 +104,68 @@ try {
   if (settleMs) {
     await window.waitForTimeout(settleMs);
     body = await frame.locator('body').innerText();
+  }
+  // Abort control: the stop button only exists while a run is in flight, and
+  // pressing it must end the turn without a server error.
+  if (process.env.E2E_ABORT) {
+    // Poll: the button must appear on its own while the turn is in flight.
+    const stop = frame.locator('button.canvas-stop');
+    for (let i = 0; i < 30; i++) {
+      if ((await stop.count()) > 0) { result.stopButtonSeen = true; result.stopButtonAtMs = i * 500; break; }
+      await window.waitForTimeout(500);
+    }
+    if (result.stopButtonSeen) {
+      await stop.first().click({ force: true });
+      for (let i = 0; i < 30; i++) {
+        await window.waitForTimeout(500);
+        if ((await frame.locator('button.canvas-stop').count()) === 0) break;
+      }
+      result.stopButtonGone = (await frame.locator('button.canvas-stop').count()) === 0;
+      // The session must still accept work afterwards.
+      const input2 = frame.locator('textarea').first();
+      await dismissToasts();
+      await input2.fill('Reply with exactly: E2E-AFTER-ABORT', { force: true });
+      await input2.press('Enter');
+      let after = '';
+      for (let i = 0; i < 60; i++) {
+        await window.waitForTimeout(1000);
+        after = await frame.locator('body').innerText();
+        if (/E2E-AFTER-ABORT/.test(after.replace('Reply with exactly: E2E-AFTER-ABORT', ''))) break;
+      }
+      result.afterAbortReplySeen = /E2E-AFTER-ABORT/.test(after.replace('Reply with exactly: E2E-AFTER-ABORT', ''));
+    }
+  }
+  // Session persistence: reload the webview and the stored conversation is
+  // replayed by the server, so the earlier prompt/reply are still on screen.
+  if (process.env.E2E_RELOAD) {
+    await window.keyboard.press('Control+Shift+P');
+    await window.waitForTimeout(1200);
+    await window.keyboard.type('reload webviews');
+    await window.waitForTimeout(1200);
+    await window.keyboard.press('Enter');
+    await window.waitForTimeout(1200);
+    // Frame handle goes stale on reload; find the new one.
+    let frame2 = null;
+    for (let i = 0; i < 40 && !frame2; i++) {
+      await window.waitForTimeout(1000);
+      frame2 = window.frames().find((f) => /vscode-webview:\/\/[^/]+\/fake\.html/.test(f.url())) ?? null;
+      if (frame2) {
+        try { await frame2.locator('textarea').first().waitFor({ state: 'visible', timeout: 4000 }); }
+        catch { frame2 = null; }
+      }
+    }
+    result.reloadFrameFound = Boolean(frame2);
+    if (frame2) {
+      let reloaded = '';
+      for (let i = 0; i < 20; i++) {
+        await window.waitForTimeout(1000);
+        reloaded = await frame2.locator('body').innerText();
+        if (new RegExp(EXPECT).test(reloaded)) break;
+      }
+      result.reloadHistorySeen = new RegExp(EXPECT).test(reloaded);
+      result.reloadedText = reloaded.slice(0, 400);
+      if (process.env.E2E_RELOAD_SHOT) await window.screenshot({ path: process.env.E2E_RELOAD_SHOT });
+    }
   }
   if (process.env.E2E_CLICK_SPLIT) {
     const split = frame.locator('button', { hasText: 'split' }).first();
@@ -92,12 +187,18 @@ try {
   result.thinkingSeen = /Thinking|Thought/.test(body);
   console.log('THREAD TEXT >>>\n' + body.slice(0, 2000));
   let html = '';
+  // A reload (E2E_RELOAD) detaches the original frame handle, so all of these
+  // dumps are best-effort.
+  let liveFrame = frame;
   try {
-    html = await frame.locator('#root').innerHTML();
+    liveFrame = window.frames().find((f) => /vscode-webview:\/\/[^/]+\/fake\.html/.test(f.url())) ?? frame;
+  } catch { /* keep original */ }
+  try {
+    html = await liveFrame.locator('#root').innerHTML();
     console.log('ROOT HTML >>>\n' + html.slice(0, 3000));
   } catch (e) { console.log('html dump failed', String(e)); }
   result.diffSeen = /diff-line-num|diff-line-syntax-raw|diff-tailwindcss-wrapper/.test(html);
-  result.diffDump = await frame.evaluate(() => {
+  result.diffDump = await liveFrame.evaluate(() => {
     const root = document.querySelector('.diff-tailwindcss-wrapper');
     if (!root) return 'no wrapper';
     return {
@@ -106,13 +207,13 @@ try {
       childCount: root.querySelectorAll('*').length,
     };
   });
-  result.diffSplitRendered = await frame.evaluate(() => {
+  result.diffSplitRendered = await liveFrame.evaluate(() => {
     const root = document.querySelector('.diff-tailwindcss-wrapper');
     if (!root) return null;
     const tables = root.querySelectorAll('table');
     return { tables: tables.length, classes: root.className.slice(0, 80) };
   });
-  result.horizontalOverflow = await frame.evaluate(() => {
+  result.horizontalOverflow = await liveFrame.evaluate(() => {
     const vp = document.querySelector('#root > div > div');
     if (!vp) return null;
     if (vp.scrollWidth <= vp.clientWidth + 1) return false;
@@ -129,9 +230,10 @@ try {
     return true;
   });
   result.splitToggleSeen = /unified/.test(html) && /split/.test(html);
+  clearInterval(toastSweeper);
 } catch (err) {
   result.error = String(err);
 }
 
 console.log('RESULT ' + JSON.stringify(result, null, 2));
-process.exit(result.replySeen ? 0 : 1);
+process.exit(result.replySeen || result.reloadHistorySeen || result.afterAbortReplySeen ? 0 : 1);

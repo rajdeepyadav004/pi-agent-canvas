@@ -14,9 +14,11 @@ export class CanvasPanel {
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
+  /** Endpoint of this window's pi-canvas-server. */
+  private readonly wsUrl: string;
   private disposables: vscode.Disposable[] = [];
 
-  public static async createOrShow(extensionUri: vscode.Uri): Promise<void> {
+  public static async createOrShow(extensionUri: vscode.Uri, wsUrl?: string): Promise<void> {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
     if (CanvasPanel.currentPanel) {
@@ -36,7 +38,7 @@ export class CanvasPanel {
       },
     );
 
-    const instance = new CanvasPanel(panel, extensionUri);
+    const instance = new CanvasPanel(panel, extensionUri, wsUrl);
     CanvasPanel.currentPanel = instance;
     await instance.setHtml();
 
@@ -48,9 +50,10 @@ export class CanvasPanel {
     );
   }
 
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, wsUrl?: string) {
     this.panel = panel;
     this.extensionUri = extensionUri;
+    this.wsUrl = wsUrl ?? 'ws://127.0.0.1:47811';
   }
 
   private async setHtml(): Promise<void> {
@@ -74,13 +77,16 @@ export class CanvasPanel {
       `font-src ${cspSource}`,
       // pi-canvas-server on localhost — webview WebSockets bypass the ext
       // host's fetch patching entirely (the whole point of the split).
-      'connect-src ws://127.0.0.1:47811',
+      `connect-src ${this.wsUrl}`,
     ].join('; ');
 
+    // replaceAll: the nonce appears on every script tag, and a missed one is
+    // silently CSP-blocked (String.replace only swaps the first match).
     return html
-      .replace('__CSP__', csp)
-      .replace('__SCRIPT_URI__', scriptUri.toString())
-      .replace('__NONCE__', nonce);
+      .replaceAll('__CSP__', csp)
+      .replaceAll('__SCRIPT_URI__', scriptUri.toString())
+      .replaceAll('__WS_URL__', this.wsUrl)
+      .replaceAll('__NONCE__', nonce);
   }
 
   /**

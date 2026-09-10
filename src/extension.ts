@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { CanvasPanel } from './canvasPanel';
@@ -38,11 +39,15 @@ async function disableAiFeatures(): Promise<void> {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   void disableAiFeatures();
+  // One agent per window: allocate a free port unless one was specified. A
+  // fixed port made a second window either fail to start its server or attach
+  // to the first window's agent, which is pointed at a different workspace.
+  PI_PORT = process.env.PI_CANVAS_PORT ?? String(await freePort());
   startPiServer();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('piAgentCanvas.open', () => {
-      CanvasPanel.createOrShow(context.extensionUri);
+      CanvasPanel.createOrShow(context.extensionUri, wsUrl());
     }),
   );
 
@@ -110,15 +115,45 @@ async function closeChatSurfaces(): Promise<void> {
  */
 let serverProc: ReturnType<typeof spawn> | undefined;
 
+/**
+ * This window's canvas server endpoint. Each VS Code window gets its own port
+ * so two windows never share (or silently steal) one agent — the previous
+ * fixed port meant the second window attached to the first window's server,
+ * pointed at the wrong workspace.
+ */
+let PI_PORT = '47811';
+
+/** An ephemeral localhost port; the window is bound to it for its lifetime. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+const wsUrl = () => `ws://127.0.0.1:${PI_PORT}`;
+
 function startPiServer(): void {
   if (serverProc) return;
   const serverPath = join(__dirname, '..', 'scripts', 'pi-server.mjs');
   if (!existsSync(serverPath)) return;
   // The agent works in the user's open project, not the extension folder.
+  // Note: PI_CANVAS_SESSION_DIR / PI_CANVAS_NEW_SESSION are inherited from this
+  // process's environment (see scripts/pi-server.mjs); sessions otherwise live
+  // in pi's own session directory, so the canvas and `pi --continue` agree.
   const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const child = spawn('node', [serverPath], {
     cwd: join(__dirname, '..'),
-    env: workspaceCwd ? { ...process.env, PI_CANVAS_CWD: workspaceCwd } : process.env,
+    env: {
+      ...process.env,
+      PI_CANVAS_PORT: PI_PORT,
+      ...(workspaceCwd ? { PI_CANVAS_CWD: workspaceCwd } : {}),
+    },
     detached: true,
     stdio: 'ignore',
   });

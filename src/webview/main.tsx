@@ -18,6 +18,9 @@ import {
   type ThreadMessage,
   type ReasoningMessagePartComponent,
   type ToolCallMessagePartProps,
+  type ThreadMessageLike,
+  useAui,
+  useAuiState,
 } from '@assistant-ui/react';
 import { MarkdownTextPrimitive, type CodeHeaderProps } from '@assistant-ui/react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -40,9 +43,14 @@ type PiEvent = {
   result?: unknown;
   isError?: boolean;
   error?: unknown;
+  messages?: WireMessage[];
+  aborted?: boolean;
+  sessionFile?: string | null;
 };
 
-const WS_URL = 'ws://127.0.0.1:47811';
+// Injected by the extension (media/index.html) — one server per window.
+declare global { interface Window { __PI_CANVAS_WS__?: string } }
+const WS_URL = window.__PI_CANVAS_WS__ ?? 'ws://127.0.0.1:47811';
 const piEventListeners = new Set<(event: PiEvent) => void>();
 
 let socket: WebSocket | null = null;
@@ -62,11 +70,90 @@ function connect() {
 }
 connect();
 
-function sendToPi(msg: unknown): void {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+/** Returns false when the server socket isn't open (caller surfaces that). */
+function sendToPi(msg: unknown): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(msg));
+  return true;
 }
 
 // ---------------------------------------------------------------------------
+// Stored-session history → assistant-ui messages.
+//
+// The server replays the pi session's own messages on connect, so a reloaded
+// webview shows the thread the agent still has in context (and the next prompt
+// continues it). Tool results arrive as separate messages and are folded back
+// into the tool-call part they belong to rather than rendered on their own.
+// ---------------------------------------------------------------------------
+type WireContent = {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  id?: string;
+  name?: string;
+  arguments?: Record<string, any>;
+};
+type WireMessage = {
+  role?: string;
+  content?: string | WireContent[];
+  toolCallId?: string;
+  details?: unknown;
+  isError?: boolean;
+};
+
+function contentToText(content: string | WireContent[] | undefined): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((c) => (c.type === 'text' ? c.text ?? '' : '')).join('');
+}
+
+function historyToThreadMessages(messages: WireMessage[]): ThreadMessageLike[] {
+  const out: ThreadMessageLike[] = [];
+  // toolCallId -> the part awaiting its result, so results fold in place.
+  const pending = new Map<string, Extract<Part, { type: 'tool-call' }>>();
+
+  for (const m of messages) {
+    if (m.role === 'user') {
+      const text = contentToText(m.content);
+      if (text.trim()) out.push({ role: 'user', content: [{ type: 'text', text }] });
+      continue;
+    }
+    if (m.role === 'assistant') {
+      const content: any[] = [];
+      for (const c of Array.isArray(m.content) ? m.content : []) {
+        if (c.type === 'text' && c.text) content.push({ type: 'text', text: c.text });
+        else if (c.type === 'thinking' && c.thinking) content.push({ type: 'reasoning', text: c.thinking });
+        else if (c.type === 'toolCall' && c.id) {
+          const part: Extract<Part, { type: 'tool-call' }> = {
+            type: 'tool-call',
+            toolCallId: c.id,
+            toolName: c.name ?? 'tool',
+            args: c.arguments ?? {},
+            argsText: '',
+            isError: false,
+          };
+          pending.set(c.id, part);
+          content.push(part);
+        }
+      }
+      if (content.length) {
+        out.push({ role: 'assistant', content, status: { type: 'complete', reason: 'stop' } });
+      }
+      continue;
+    }
+    if (m.role === 'toolResult' && m.toolCallId) {
+      const part = pending.get(m.toolCallId);
+      if (part) {
+        // Same shape the live tool_execution_end path produces, so ToolCard and
+        // EditCard (result.details.patch) render history and live turns alike.
+        part.result = { content: m.content, details: m.details };
+        part.isError = Boolean(m.isError);
+      }
+    }
+  }
+  return out;
+}
+
 // Adapter — accumulates a part stream for the running turn.
 // ---------------------------------------------------------------------------
 type TextPart = { type: 'text'; text: string };
@@ -166,11 +253,20 @@ const PiAdapter: ChatModelAdapter = {
     };
     piEventListeners.add(listener);
 
-    const onAbort = () => sendToPi({ type: 'abort' });
+    // Waking the parked loop is what makes cancellation take effect: the run
+    // loop in assistant-ui aborts the signal but never finishes the generator
+    // for us, so without notify() this await would hold the turn open until
+    // some unrelated event arrived.
+    const onAbort = () => {
+      sendToPi({ type: 'abort' });
+      notify();
+    };
     abortSignal.addEventListener('abort', onAbort);
 
     try {
-      sendToPi({ type: 'prompt', message: prompt });
+      if (!sendToPi({ type: 'prompt', message: prompt })) {
+        throw new Error('pi-canvas-server is not connected — is the canvas window still starting?');
+      }
 
       while (!settled) {
         await new Promise<void>((resolve) => waiters.push(resolve));
@@ -199,6 +295,13 @@ const uiCss = `
   color: #fafafa; padding: 8px 12px; font: inherit; resize: none; outline: none;
 }
 .canvas-input:focus { border-color: #52525b; }
+.canvas-stop {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  background: #27272a; border: 1px solid #3f3f46; border-radius: 8px;
+  color: #e4e4e7; padding: 8px 12px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.canvas-stop:hover { background: #3f3f46; }
+.canvas-stop-glyph { width: 8px; height: 8px; background: #f87171; border-radius: 2px; }
 `;
 
 // Markdown styling for assistant text. Scoped to .canvas-md so it can't leak
@@ -495,7 +598,8 @@ const styles: Record<string, React.CSSProperties> = {
   // Overrides the base message cap: the assistant column spans the thread so
   // diffs (especially split view) get the full width; prose is capped in .canvas-md.
   assistant: { alignSelf: 'stretch', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal', minWidth: 0, maxWidth: '100%' },
-  composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a' },
+  composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a', display: 'flex', alignItems: 'center', gap: 8 },
+  connecting: { color: '#8b8b94', fontFamily: Mono, fontSize: 12, padding: 24 },
 };
 
 function CanvasThread() {
@@ -510,6 +614,7 @@ function CanvasThread() {
       {/* ComposerPrimitive.Root renders the <form> — Enter submits via it. */}
       <ComposerPrimitive.Root style={styles.composer}>
         <ComposerPrimitive.Input className="canvas-input" rows={1} autoFocus />
+        <StopButton />
       </ComposerPrimitive.Root>
     </ThreadPrimitive.Root>
   );
@@ -536,16 +641,56 @@ const AssistantMessage = () => (
   </MessagePrimitive.Root>
 );
 
+// Cancelling the run aborts the signal; the adapter turns that into an
+// {"type":"abort"} command for pi-canvas-server, which stops the agent.
+function StopButton() {
+  const aui = useAui();
+  const running = useAuiState((s) => s.thread.isRunning);
+  if (!running) return null;
+  return (
+    <button type="button" className="canvas-stop" title="Stop (Esc)" onClick={() => aui.thread.cancelRun()}>
+      <span className="canvas-stop-glyph" />
+      stop
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Bootstrap
+//
+// The runtime is created once the session history arrives, so a reloaded
+// webview starts with the stored conversation already in the thread. The `key`
+// remounts it if the server restarts and replays a (possibly different)
+// session.
 // ---------------------------------------------------------------------------
-function App() {
-  const runtime = useLocalRuntime(PiAdapter);
+function CanvasRuntime({ initialMessages }: { initialMessages: readonly ThreadMessageLike[] }) {
+  const runtime = useLocalRuntime(PiAdapter, { initialMessages });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <CanvasThread />
     </AssistantRuntimeProvider>
   );
+}
+
+function App() {
+  const [initial, setInitial] = React.useState<ThreadMessageLike[] | null>(null);
+
+  React.useEffect(() => {
+    const listener = (event: PiEvent) => {
+      if (event.type !== 'history') return;
+      // Hydrate once, from the first replay. Later replays (a reconnect) must
+      // not rebuild the runtime: remounting throws away the thread and any
+      // run already in flight. The agent's context lives server-side anyway.
+      setInitial((prev) => prev ?? historyToThreadMessages(Array.isArray(event.messages) ? event.messages : []));
+    };
+    piEventListeners.add(listener);
+    return () => { piEventListeners.delete(listener); };
+  }, []);
+
+  // No agent without the server, so waiting for the first replay is honest —
+  // and it means every prompt is typed into the runtime that owns the history.
+  if (initial === null) return <div style={styles.connecting}>Connecting to pi…</div>;
+  return <CanvasRuntime initialMessages={initial} />;
 }
 
 // Acquire the VS Code API exactly once (a second acquire throws).

@@ -10,9 +10,16 @@
  * Protocol (JSON, both directions):
  *   in:  {"type":"prompt","message":"..."} | {"type":"abort"}
  *   out: SDK session events verbatim (agent_start, message_update, …) plus
- *        {"type":"server_ready"} and {"type":"settled"} | {"type":"server_error"}
+ *        {"type":"server_ready"}, {"type":"history","messages":[…]},
+ *        {"type":"settled","aborted":bool} and {"type":"server_error"}
  *
- * Run: node scripts/pi-server.mjs   (env: PI_CANVAS_PORT, PI_CANVAS_CWD)
+ * Sessions are persisted: the agent continues the most recent on-disk session
+ * for the workspace, exactly like `pi --continue` does, so a canvas reload (or
+ * a terminal `pi`) picks up the same conversation.
+ *
+ * Run: node scripts/pi-server.mjs
+ *   env: PI_CANVAS_PORT, PI_CANVAS_CWD, PI_CANVAS_SESSION_DIR,
+ *        PI_CANVAS_NEW_SESSION=1 (start fresh instead of continuing)
  */
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent';
 import { createServer } from 'node:http';
@@ -23,10 +30,19 @@ const PORT = Number(process.env.PI_CANVAS_PORT ?? 47811);
 // extension. Falls back to the process cwd when started by hand.
 const CWD = process.env.PI_CANVAS_CWD ?? process.cwd();
 
+// Sessions live on disk by default (pi's own session directory, so the canvas
+// and `pi --continue` share one conversation); PI_CANVAS_SESSION_DIR redirects
+// them, and PI_CANVAS_NEW_SESSION=1 forces a fresh session.
+const SESSION_DIR = process.env.PI_CANVAS_SESSION_DIR || undefined;
+const sessionManager =
+  process.env.PI_CANVAS_NEW_SESSION === '1'
+    ? SessionManager.create(CWD, SESSION_DIR)
+    : SessionManager.continueRecent(CWD, SESSION_DIR);
+
 const modelRuntime = await ModelRuntime.create();
 const { session } = await createAgentSession({
   cwd: CWD,
-  sessionManager: SessionManager.inMemory(),
+  sessionManager,
   modelRuntime,
 });
 
@@ -44,7 +60,19 @@ session.subscribe((event) => {
   broadcast(event);
 });
 
+/** Messages of the live session, in LLM context order (compaction-aware). */
+const buildHistory = () => {
+  try {
+    return sessionManager.buildSessionContext().messages;
+  } catch (err) {
+    console.error('[pi-canvas-server] failed to read session history:', err);
+    return [];
+  }
+};
+
 let chain = Promise.resolve();
+// Set while a prompt is in flight so an abort can be attributed to it.
+let activeRun = null;
 
 const httpServer = createServer((_req, res) => {
   // Liveness endpoint — also proves outbound-independent startup.
@@ -57,7 +85,9 @@ const wss = new WebSocketServer({ server: httpServer });
 wss.on('connection', (ws) => {
   console.log('[pi-canvas-server] client connected');
   clients.add(ws);
-  ws.send(JSON.stringify({ type: 'server_ready' }));
+  ws.send(JSON.stringify({ type: 'server_ready', sessionFile: sessionManager.getSessionFile?.() ?? null }));
+  // Replay stored conversation so a reloaded webview renders the same thread.
+  ws.send(JSON.stringify({ type: 'history', messages: buildHistory() }));
   ws.on('close', () => clients.delete(ws));
   ws.on('message', (data) => {
     let cmd;
@@ -70,17 +100,37 @@ wss.on('connection', (ws) => {
     if (cmd.type === 'prompt') {
       const message = String(cmd.message ?? '').trim();
       if (!message) return;
+      const run = { aborted: false };
+      activeRun = run;
       // Serialized: one prompt at a time, in submission order.
       chain = chain
         .then(() => session.prompt(message))
-        .then(() => { broadcast({ type: 'settled' }); console.log('[pi-canvas-server] prompt settled, deltas:', globalThis.__deltas ?? 0); })
-        .catch((err) => broadcast({ type: 'server_error', error: String(err) }));
+        .then(
+          () => {
+            if (activeRun === run) activeRun = null;
+            broadcast({ type: 'settled', aborted: run.aborted });
+            console.log('[pi-canvas-server] settled (aborted:', run.aborted, ') deltas:', globalThis.__deltas ?? 0);
+          },
+          (err) => {
+            if (activeRun === run) activeRun = null;
+            // An abort is a normal outcome, not an error to surface.
+            if (run.aborted || /abort/i.test(String(err))) {
+              broadcast({ type: 'settled', aborted: true });
+              console.log('[pi-canvas-server] settled (aborted)');
+            } else {
+              broadcast({ type: 'server_error', error: String(err) });
+              console.error('[pi-canvas-server] prompt failed:', err);
+            }
+          }
+        );
     } else if (cmd.type === 'abort') {
-      void session.abort();
+      if (activeRun) activeRun.aborted = true;
+      void session.abort().catch((err) => console.error('[pi-canvas-server] abort failed:', err));
     }
   });
 });
 
 httpServer.listen(PORT, '127.0.0.1', () => {
   console.log(`[pi-canvas-server] listening on ws://127.0.0.1:${PORT} (cwd: ${CWD})`);
+  console.log(`[pi-canvas-server] session: ${sessionManager.getSessionFile?.() ?? '(in-memory)'}`);
 });
