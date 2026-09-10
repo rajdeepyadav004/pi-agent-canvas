@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { CanvasPanel } from './canvasPanel';
-import { PiBridge, bridgeLog } from './piBridge';
 
 /**
  * pi-agent-canvas.
@@ -36,9 +38,7 @@ async function disableAiFeatures(): Promise<void> {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   void disableAiFeatures();
-
-  // One pi session per canvas window (in-process; re-created per activation).
-  PiBridgeHolder.sessionId = context.extensionUri.fsPath;
+  startPiServer();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('piAgentCanvas.open', () => {
@@ -102,19 +102,29 @@ async function closeChatSurfaces(): Promise<void> {
   }
 }
 
-export function deactivate(): void {
-  PiBridgeHolder.bridge?.dispose();
+/**
+ * pi-canvas-server: plain-Node process owning the pi AgentSession, spoken to
+ * by the webview over ws://127.0.0.1:47811. Runs OUTSIDE the extension host
+ * because VS Code patches fetch/http there and SSE streaming stalls. Spawned
+ * detached (own session) so it survives window reloads.
+ */
+let serverProc: ReturnType<typeof spawn> | undefined;
+
+function startPiServer(): void {
+  if (serverProc) return;
+  const serverPath = join(__dirname, '..', 'scripts', 'pi-server.mjs');
+  if (!existsSync(serverPath)) return;
+  const child = spawn('node', [serverPath], {
+    cwd: join(__dirname, '..'),
+    env: process.env,
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  serverProc = child;
+  child.on('error', () => { serverProc = undefined; });
 }
 
-/** Lazily created, disposed with the extension. */
-export class PiBridgeHolder {
-  static bridge: PiBridge | undefined;
-  static sessionId = '';
-
-  static get(workspaceRoot: string): PiBridge {
-    if (!PiBridgeHolder.bridge) {
-      PiBridgeHolder.bridge = new PiBridge(workspaceRoot, bridgeLog);
-    }
-    return PiBridgeHolder.bridge;
-  }
+export function deactivate(): void {
+  serverProc?.kill();
 }

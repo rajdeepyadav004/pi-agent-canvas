@@ -16,19 +16,35 @@ import {
 } from '@assistant-ui/react';
 
 // ---------------------------------------------------------------------------
-// pi bridge (webview side): postMessage → extension host → `pi --mode json`.
-// The host relays every pi event as {type:'pi-event', event}; the adapter
-// accumulates text deltas and streams them as the assistant message.
+// pi transport: direct WebSocket to pi-canvas-server (plain node process on
+// localhost). Webview WebSockets are plain Chromium — VS Code's extension-host
+// fetch patching (which stalls SSE) never touches this path.
 // ---------------------------------------------------------------------------
-type PiEvent = { type?: string; [k: string]: unknown };
+type PiEvent = { type?: string; assistantMessageEvent?: { type?: string; delta?: string }; error?: unknown };
 
+const WS_URL = 'ws://127.0.0.1:47811';
 const piEventListeners = new Set<(event: PiEvent) => void>();
-window.addEventListener('message', (e) => {
-  const msg = e.data as { type?: string; event?: PiEvent };
-  if (msg?.type === 'pi-event' && msg.event) {
-    for (const l of piEventListeners) l(msg.event);
-  }
-});
+
+let socket: WebSocket | null = null;
+function connect() {
+  socket = new WebSocket(WS_URL);
+  socket.onmessage = (ev) => {
+    try {
+      const event = JSON.parse(ev.data as string) as PiEvent;
+      for (const l of piEventListeners) l(event);
+    } catch { /* ignore malformed lines */ }
+  };
+  socket.onclose = () => {
+    socket = null;
+    setTimeout(connect, 2000); // reconnect; server may start later
+  };
+  socket.onerror = () => socket?.close();
+}
+connect();
+
+function sendToPi(msg: unknown): void {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+}
 
 function textOf(msg: ThreadMessage): string {
   return (msg.content ?? [])
@@ -47,7 +63,6 @@ function extractLastUserText(messages: readonly ThreadMessage[]): string {
 
 const PiAdapter: ChatModelAdapter = {
   async *run({ messages, abortSignal }) {
-    const vscode = vsapi();
     const prompt = extractLastUserText(messages);
 
     let text = '';
@@ -59,20 +74,18 @@ const PiAdapter: ChatModelAdapter = {
     const listener = (event: PiEvent) => {
       switch (event.type) {
         case 'message_update': {
-          const delta = (event.assistantMessageEvent as { type?: string; delta?: string } | undefined);
-          if (delta?.type === 'text_delta' && typeof delta.delta === 'string') {
-            text += delta.delta;
+          if (event.assistantMessageEvent?.type === 'text_delta' && typeof event.assistantMessageEvent.delta === 'string') {
+            text += event.assistantMessageEvent.delta;
             notify();
           }
           break;
         }
-        case 'pi_settled':
-        case 'agent_end':
+        case 'settled':
           settled = true;
           notify();
           break;
-        case 'pi_error':
-          error = String(event.error ?? 'pi bridge error');
+        case 'server_error':
+          error = String(event.error ?? 'pi server error');
           settled = true;
           notify();
           break;
@@ -80,11 +93,11 @@ const PiAdapter: ChatModelAdapter = {
     };
     piEventListeners.add(listener);
 
-    const onAbort = () => vscode.postMessage({ type: 'pi-abort' });
+    const onAbort = () => sendToPi({ type: 'abort' });
     abortSignal.addEventListener('abort', onAbort);
 
     try {
-      vscode.postMessage({ type: 'pi-prompt', message: prompt });
+      sendToPi({ type: 'prompt', message: prompt });
 
       while (!settled) {
         await new Promise<void>((resolve) => waiters.push(resolve));

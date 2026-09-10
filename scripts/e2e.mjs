@@ -39,6 +39,7 @@ try {
 
   const window = await app.firstWindow();
   await window.waitForLoadState('domcontentloaded');
+  window.on('console', (msg) => console.log('[console]', msg.type(), msg.text().slice(0, 300)));
 
   // Wait for the canvas webview content frame (VS Code nests it at fake.html).
   let frame = null;
@@ -62,6 +63,7 @@ try {
     await window.waitForTimeout(1000);
     body = await frame.locator('body').innerText();
     if (/E2E-BRIDGE-OK/.test(body)) break;
+    if (i === 30 || i === 60 || i === 90) console.log('[t='+i+'s] body:', JSON.stringify(body.slice(0, 300)));
   }
   const replies = [...body.matchAll(/E2E-BRIDGE-OK/g)].length;
   if (replies >= 2) result.replySeen = true; // user message + assistant reply

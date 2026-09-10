@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PiBridge, type PiEvent } from './piBridge';
-import { PiBridgeHolder } from './extension';
 
 /**
  * Owns the single canvas WebviewPanel (one instance, reused when the command
@@ -41,7 +39,6 @@ export class CanvasPanel {
     const instance = new CanvasPanel(panel, extensionUri);
     CanvasPanel.currentPanel = instance;
     await instance.setHtml();
-    instance.attachPiBridge();
 
     panel.onDidDispose(() => instance.dispose(), undefined, instance.disposables);
     panel.webview.onDidReceiveMessage(
@@ -75,6 +72,9 @@ export class CanvasPanel {
       "style-src 'unsafe-inline'",
       `img-src ${cspSource} data:`,
       `font-src ${cspSource}`,
+      // pi-canvas-server on localhost — webview WebSockets bypass the ext
+      // host's fetch patching entirely (the whole point of the split).
+      'connect-src ws://127.0.0.1:47811',
     ].join('; ');
 
     return html
@@ -83,19 +83,11 @@ export class CanvasPanel {
       .replace('__NONCE__', nonce);
   }
 
-  private attachPiBridge(): void {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? this.extensionUri.fsPath;
-    const bridge = PiBridgeHolder.get(this.extensionUri.fsPath);
-    bridge.onEvent((event: PiEvent) => this.post({ type: 'pi-event', event }));
-  }
-
   /**
-   * Extension host ⇄ webview bridge. Messages come from the webview app.
+   * Extension host ⇄ webview bridge. Messages come from media/index.js.
+   * This switch grows as the real canvas features land.
    */
   private async handleMessage(msg: unknown): Promise<void> {
-    try {
-      appendFileSync('/tmp/canvas-bridge.log', `${new Date().toISOString()} ${JSON.stringify(msg)}\n`);
-    } catch { /* diagnostics only */ }
     const message = msg as { type?: string; [k: string]: unknown };
     switch (message.type) {
       case 'ping': {
@@ -108,23 +100,6 @@ export class CanvasPanel {
             chrome: readChromeSettings(),
           },
         });
-        break;
-      }
-      case 'pi-prompt': {
-        const text = String(message.message ?? '').trim();
-        if (text) PiBridgeHolder.get(this.extensionUri.fsPath).prompt(text);
-        break;
-      }
-      case 'pi-abort': {
-        PiBridgeHolder.get(this.extensionUri.fsPath).abort();
-        break;
-      }
-      case 'webview-error': {
-        console.error('[pi-agent-canvas] webview error:', message.payload);
-        break;
-      }
-      case 'ready': {
-        console.log('[pi-agent-canvas] webview ready');
         break;
       }
       default: {
