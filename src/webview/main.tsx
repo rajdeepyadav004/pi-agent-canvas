@@ -16,10 +16,11 @@ import {
   MessagePrimitive,
   type ChatModelAdapter,
   type ThreadMessage,
-  type TextMessagePartComponent,
   type ReasoningMessagePartComponent,
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react';
+import { MarkdownTextPrimitive, type CodeHeaderProps } from '@assistant-ui/react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // ---------------------------------------------------------------------------
 // pi transport: direct WebSocket to pi-canvas-server.
@@ -188,7 +189,68 @@ const PiAdapter: ChatModelAdapter = {
 // ---------------------------------------------------------------------------
 const Mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
-const TextPartView: TextMessagePartComponent = ({ text }) => <>{text}</>;
+// Markdown styling for assistant text. Scoped to .canvas-md so it can't leak
+// into the tool cards / composer chrome.
+const markdownCss = `
+.canvas-md > *:first-child { margin-top: 0; }
+.canvas-md > *:last-child { margin-bottom: 0; }
+.canvas-md p { margin: 0 0 10px; }
+.canvas-md h1, .canvas-md h2, .canvas-md h3, .canvas-md h4 {
+  margin: 16px 0 8px; font-weight: 600; line-height: 1.3; color: #fafafa;
+}
+.canvas-md h1 { font-size: 1.35em; }
+.canvas-md h2 { font-size: 1.2em; }
+.canvas-md h3 { font-size: 1.05em; }
+.canvas-md ul, .canvas-md ol { margin: 0 0 10px; padding-left: 22px; }
+.canvas-md li { margin: 3px 0; }
+.canvas-md li > p { margin: 0; }
+.canvas-md a { color: #7dd3fc; text-decoration: none; }
+.canvas-md a:hover { text-decoration: underline; }
+.canvas-md strong { color: #fafafa; font-weight: 600; }
+.canvas-md em { color: #e4e4e7; }
+.canvas-md hr { border: 0; border-top: 1px solid #2a2a30; margin: 14px 0; }
+.canvas-md blockquote {
+  margin: 0 0 10px; padding: 2px 0 2px 12px;
+  border-left: 2px solid #3f3f46; color: #a1a1aa;
+}
+.canvas-md :not(pre) > code {
+  background: #26262b; border-radius: 4px; padding: 1px 5px;
+  font-family: ${Mono}; font-size: 0.88em; color: #e4e4e7;
+}
+.canvas-md pre {
+  margin: 0; padding: 10px 12px; background: #101013;
+  overflow-x: auto; font-family: ${Mono}; font-size: 12px; line-height: 1.5;
+}
+.canvas-md pre code { font-family: inherit; }
+.canvas-md table {
+  border-collapse: collapse; margin: 0 0 10px; font-size: 0.92em; display: block; overflow-x: auto;
+}
+.canvas-md th, .canvas-md td { border: 1px solid #2a2a30; padding: 5px 9px; text-align: left; }
+.canvas-md th { background: #1e1e22; font-weight: 600; color: #fafafa; }
+.canvas-md input[type='checkbox'] { margin-right: 6px; }
+`;
+
+/** Fenced code: language label + copy button above a styled block. */
+const CodeHeader = ({ language, code }: CodeHeaderProps) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', background: '#16161a', borderBottom: '1px solid #2a2a30', fontFamily: Mono, fontSize: 11, color: '#8b8b94' }}>
+    <span>{language || 'text'}</span>
+    <button
+      type="button"
+      onClick={() => void navigator.clipboard?.writeText(code)}
+      style={{ marginLeft: 'auto', background: 'none', border: 0, color: '#8b8b94', cursor: 'pointer', font: 'inherit', padding: 0 }}
+    >
+      copy
+    </button>
+  </div>
+);
+
+const TextPartView = () => (
+  <MarkdownTextPrimitive
+    remarkPlugins={[remarkGfm]}
+    className="canvas-md"
+    components={{ CodeHeader }}
+  />
+);
 
 const ReasoningPartView: ReasoningMessagePartComponent = ({ text, status }) => {
   const streaming = status?.type === 'running';
@@ -263,7 +325,7 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#71717a', fontSize: 13 },
   message: { maxWidth: 720, padding: '10px 14px', borderRadius: 10, lineHeight: 1.5 },
   user: { alignSelf: 'flex-end', background: '#27272a', color: '#fafafa', whiteSpace: 'pre-wrap' },
-  assistant: { alignSelf: 'flex-start', background: '#18181b', border: '1px solid #27272a' },
+  assistant: { alignSelf: 'flex-start', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal' },
   composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a' },
   input: {
     width: '100%',
@@ -343,6 +405,10 @@ function vsapi() {
 
 const container = document.getElementById('root');
 if (container) {
+  // Markdown styles live in a <style> tag — cheaper than per-node inline styles.
+  const styleTag = document.createElement('style');
+  styleTag.textContent = markdownCss;
+  document.head.append(styleTag);
   createRoot(container).render(<App />);
 }
 

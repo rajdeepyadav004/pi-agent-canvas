@@ -67,6 +67,11 @@ try {
     if (new RegExp(EXPECT).test(body)) break;
     if (i === 30 || i === 60 || i === 90) console.log('[t='+i+'s] body:', JSON.stringify(body.slice(0, 300)));
   }
+  const settleMs = Number(process.env.E2E_SETTLE_MS ?? 0);
+  if (settleMs) {
+    await window.waitForTimeout(settleMs);
+    body = await frame.locator('body').innerText();
+  }
   const replies = [...body.matchAll(new RegExp(EXPECT, 'g'))].length;
   if (replies >= 2) result.replySeen = true; // user message + assistant reply
   result.toolCardSeen = /\bbash\b/.test(body);

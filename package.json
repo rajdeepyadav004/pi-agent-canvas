@@ -57,9 +57,11 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.18",
+    "@assistant-ui/react-markdown": "^0.14.14",
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "remark-gfm": "^4.0.1",
     "ws": "^8.21.3"
   }
 }
