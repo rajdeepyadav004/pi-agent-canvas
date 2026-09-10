@@ -53,7 +53,9 @@ try {
   const input = frame.locator('textarea').first();
   await input.waitFor({ state: 'visible', timeout: 30_000 });
   await input.click();
-  await input.fill('Reply with exactly: E2E-BRIDGE-OK');
+  const PROMPT = process.env.E2E_PROMPT ?? 'Reply with exactly: E2E-BRIDGE-OK';
+  const EXPECT = process.env.E2E_EXPECT ?? 'E2E-BRIDGE-OK';
+  await input.fill(PROMPT);
   await input.press('Enter');
   result.sent = true;
 
@@ -62,12 +64,18 @@ try {
   for (let i = 0; i < 200; i++) {
     await window.waitForTimeout(1000);
     body = await frame.locator('body').innerText();
-    if (/E2E-BRIDGE-OK/.test(body)) break;
+    if (new RegExp(EXPECT).test(body)) break;
     if (i === 30 || i === 60 || i === 90) console.log('[t='+i+'s] body:', JSON.stringify(body.slice(0, 300)));
   }
-  const replies = [...body.matchAll(/E2E-BRIDGE-OK/g)].length;
+  const replies = [...body.matchAll(new RegExp(EXPECT, 'g'))].length;
   if (replies >= 2) result.replySeen = true; // user message + assistant reply
+  result.toolCardSeen = /\bbash\b/.test(body);
+  result.thinkingSeen = /Thinking|Thought/.test(body);
   console.log('THREAD TEXT >>>\n' + body.slice(0, 2000));
+  try {
+    const html = await frame.locator('#root').innerHTML();
+    console.log('ROOT HTML >>>\n' + html.slice(0, 3000));
+  } catch (e) { console.log('html dump failed', String(e)); }
 } catch (err) {
   result.error = String(err);
 }

@@ -114,9 +114,11 @@ function startPiServer(): void {
   if (serverProc) return;
   const serverPath = join(__dirname, '..', 'scripts', 'pi-server.mjs');
   if (!existsSync(serverPath)) return;
+  // The agent works in the user's open project, not the extension folder.
+  const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const child = spawn('node', [serverPath], {
     cwd: join(__dirname, '..'),
-    env: process.env,
+    env: workspaceCwd ? { ...process.env, PI_CANVAS_CWD: workspaceCwd } : process.env,
     detached: true,
     stdio: 'ignore',
   });

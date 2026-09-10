@@ -12,16 +12,20 @@
  *   out: SDK session events verbatim (agent_start, message_update, …) plus
  *        {"type":"server_ready"} and {"type":"settled"} | {"type":"server_error"}
  *
- * Run: node scripts/pi-server.mjs   (env: PI_CANVAS_PORT, default 47811)
+ * Run: node scripts/pi-server.mjs   (env: PI_CANVAS_PORT, PI_CANVAS_CWD)
  */
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent';
 import { createServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = Number(process.env.PI_CANVAS_PORT ?? 47811);
+// The project the agent works in — the VS Code workspace folder, passed by the
+// extension. Falls back to the process cwd when started by hand.
+const CWD = process.env.PI_CANVAS_CWD ?? process.cwd();
 
 const modelRuntime = await ModelRuntime.create();
 const { session } = await createAgentSession({
+  cwd: CWD,
   sessionManager: SessionManager.inMemory(),
   modelRuntime,
 });
@@ -78,5 +82,5 @@ wss.on('connection', (ws) => {
 });
 
 httpServer.listen(PORT, '127.0.0.1', () => {
-  console.log(`[pi-canvas-server] listening on ws://127.0.0.1:${PORT}`);
+  console.log(`[pi-canvas-server] listening on ws://127.0.0.1:${PORT} (cwd: ${CWD})`);
 });
