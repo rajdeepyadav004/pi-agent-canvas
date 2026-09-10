@@ -28,7 +28,7 @@ suite('pi-agent-canvas (normal window — perfect guest)', function () {
 
   it('extension is loaded but does NOT auto-open the canvas', async () => {
     await sleep(3500); // give a badly-behaved extension every chance to misbehave
-    assert.ok(vscode.extensions.getExtension('pi-labs.pi-agent-canvas'), 'extension should be loaded');
+    assert.ok(vscode.extensions.getExtension('rajdeepyadav004.pi-agent-canvas'), 'extension should be loaded');
     assert.strictEqual(findCanvasTabs().length, 0, 'canvas must not open itself in a normal window');
   });
 

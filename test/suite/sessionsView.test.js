@@ -15,7 +15,7 @@ const vscode = require('vscode');
 const mode = process.env.CANVAS_TEST_MODE || 'isolated';
 const suite = mode === 'isolated' ? describe : describe.skip;
 
-const EXTENSION_ID = 'pi-labs.pi-agent-canvas';
+const EXTENSION_ID = 'rajdeepyadav004.pi-agent-canvas';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function canvasTabs() {

@@ -3,7 +3,7 @@
   "displayName": "Pi Agent Canvas",
   "description": "A dedicated cockpit for the pi coding agent: conversations as editor tiles, files it touches opening in the editor, and a session list in the activity bar.",
   "version": "0.1.0",
-  "publisher": "pi-labs",
+  "publisher": "rajdeepyadav004",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"

@@ -31,7 +31,7 @@ suite('pi-agent-canvas (isolated dev window)', function () {
   });
 
   it('extension is loaded and NO chrome setting was touched', async () => {
-    assert.ok(vscode.extensions.getExtension('pi-labs.pi-agent-canvas'), 'extension should be loaded');
+    assert.ok(vscode.extensions.getExtension('rajdeepyadav004.pi-agent-canvas'), 'extension should be loaded');
     await assertChromeUntouched('isolated dev window', AI_FEATURES_OFF);
   });
 
