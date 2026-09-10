@@ -18,6 +18,7 @@ import {
   type ThreadMessage,
   type ReasoningMessagePartComponent,
   type ToolCallMessagePartProps,
+  type DataMessagePartProps,
   type ThreadMessageLike,
   useAui,
   useAuiState,
@@ -49,6 +50,12 @@ type PiEvent = {
   sessionFile?: string | null;
   sessionId?: string;
   history?: WireMessage[];
+  // bash (`!command`)
+  id?: string;
+  delta?: string;
+  command?: string;
+  excludeFromContext?: boolean;
+  bashResult?: { output?: string; exitCode?: number; cancelled?: boolean; truncated?: boolean; fullOutputPath?: string };
 };
 
 // Injected by the extension (media/index.html) — one server per window, one
@@ -60,6 +67,7 @@ declare global {
     __PI_CANVAS_MODE__?: 'new' | 'continue';
   }
 }
+const Mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 const WS_URL = window.__PI_CANVAS_WS__ ?? 'ws://127.0.0.1:47811';
 const SESSION_ID = window.__PI_CANVAS_SESSION__ || undefined;
 const SESSION_MODE = window.__PI_CANVAS_MODE__ ?? 'continue';
@@ -135,6 +143,14 @@ type WireMessage = {
   toolCallId?: string;
   details?: unknown;
   isError?: boolean;
+  // bashExecution
+  command?: string;
+  output?: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  fullOutputPath?: string;
+  excludeFromContext?: boolean;
 };
 
 function contentToText(content: string | WireContent[] | undefined): string {
@@ -177,6 +193,31 @@ function historyToThreadMessages(messages: WireMessage[]): ThreadMessageLike[] {
       }
       continue;
     }
+    if (m.role === 'bashExecution') {
+      if (m.command) {
+        out.push({
+          role: 'assistant',
+          content: [
+            {
+              type: 'data',
+              name: 'bash',
+              data: {
+                command: m.command,
+                output: m.output ?? '',
+                exitCode: m.exitCode,
+                running: false,
+                excludeFromContext: Boolean(m.excludeFromContext),
+                truncated: m.truncated,
+                cancelled: m.cancelled,
+                fullOutputPath: m.fullOutputPath,
+              },
+            },
+          ],
+          status: { type: 'complete', reason: 'stop' },
+        });
+      }
+      continue;
+    }
     if (m.role === 'toolResult' && m.toolCallId) {
       const part = pending.get(m.toolCallId);
       if (part) {
@@ -203,7 +244,36 @@ type ToolPart = {
   result?: unknown;
   isError?: boolean;
 };
-type Part = TextPart | ReasoningPart | ToolPart;
+/**
+ * A shell command the user ran with `!` / `!!`. Rendered as a card on the
+ * assistant side (it is not a chat turn), and stored by pi as a bashExecution
+ * message, so it survives a reload.
+ */
+type BashPayload = {
+  command: string;
+  output: string;
+  exitCode?: number;
+  running?: boolean;
+  excludeFromContext?: boolean;
+  truncated?: boolean;
+  cancelled?: boolean;
+  fullOutputPath?: string;
+  error?: string;
+};
+// assistant-ui's canonical data part: `{type:'data', name, data}`. The
+// `data-bash` shorthand is only accepted on input (history), not from an adapter.
+type BashPart = { type: 'data'; name: 'bash'; data: BashPayload };
+
+type Part = TextPart | ReasoningPart | ToolPart | BashPart;
+
+/** `!cmd` runs it in context; `!!cmd` keeps the output out of the model's context. */
+function parseBashInput(text: string): { command: string; excludeFromContext: boolean } | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('!')) return undefined;
+  const excludeFromContext = trimmed.startsWith('!!');
+  const command = trimmed.slice(excludeFromContext ? 2 : 1).trim();
+  return command ? { command, excludeFromContext } : undefined;
+}
 
 function textOf(msg: ThreadMessage): string {
   return (msg.content ?? [])
@@ -225,6 +295,10 @@ const PiAdapter: ChatModelAdapter = {
     const prompt = extractLastUserText(messages);
 
     const parts: Part[] = [];
+    const bash = parseBashInput(prompt);
+    // Ties this turn's bash output to this turn, so a concurrent session (or the
+    // agent's own shell calls) cannot bleed into it.
+    const bashId = bash ? `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : undefined;
     let settled = false;
     let error: string | undefined;
     const waiters: (() => void)[] = [];
@@ -278,6 +352,34 @@ const PiAdapter: ChatModelAdapter = {
           }
           break;
         }
+        case 'bash_execution_update': {
+          // Only the command this turn started; the agent's own bash tool calls
+          // use a different path and carry no id.
+          const part = parts.find((p) => p.type === 'data' && p.name === 'bash' && bashId && event.id === bashId);
+          if (part && part.type === 'data' && typeof event.delta === 'string') {
+            part.data.output += event.delta;
+            notify();
+          }
+          break;
+        }
+        case 'bash_end': {
+          if (!bashId || event.id !== bashId) break;
+          const part = parts.find((p) => p.type === 'data' && p.name === 'bash');
+          if (part && part.type === 'data') {
+            part.data.running = false;
+            part.data.error = event.error ? String(event.error) : undefined;
+            if (event.bashResult) {
+              part.data.output = event.bashResult.output ?? part.data.output;
+              part.data.exitCode = event.bashResult.exitCode;
+              part.data.cancelled = event.bashResult.cancelled;
+              part.data.truncated = event.bashResult.truncated;
+              part.data.fullOutputPath = event.bashResult.fullOutputPath;
+            }
+          }
+          settled = true;
+          notify();
+          break;
+        }
         case 'settled':
           settled = true;
           notify();
@@ -302,7 +404,22 @@ const PiAdapter: ChatModelAdapter = {
     abortSignal.addEventListener('abort', onAbort);
 
     try {
-      if (!sendToPi({ type: 'prompt', message: prompt, sessionId: activeSessionId })) {
+      if (bash) {
+        parts.push({
+          type: 'data',
+          name: 'bash',
+          data: { command: bash.command, output: '', running: true, excludeFromContext: bash.excludeFromContext },
+        });
+        if (!sendToPi({
+          type: 'bash',
+          sessionId: activeSessionId,
+          id: bashId,
+          command: bash.command,
+          excludeFromContext: bash.excludeFromContext,
+        })) {
+          throw new Error('pi-canvas-server is not connected — is the canvas window still starting?');
+        }
+      } else if (!sendToPi({ type: 'prompt', message: prompt, sessionId: activeSessionId })) {
         throw new Error('pi-canvas-server is not connected — is the canvas window still starting?');
       }
 
@@ -318,6 +435,88 @@ const PiAdapter: ChatModelAdapter = {
       abortSignal.removeEventListener('abort', onAbort);
     }
   },
+};
+
+// ---------------------------------------------------------------------------
+// Bash card — what `!command` produces
+// ---------------------------------------------------------------------------
+/**
+ * A shell command the user ran with `!` (or `!!`), with its streamed output.
+ * Deliberately looks like the tool cards: this is the same idea — watch a
+ * command run — but it was typed rather than decided by the model.
+ */
+const BashCard = ({ data, status }: DataMessagePartProps<BashPayload>) => {
+  const running = data.running || status?.type === 'running';
+  const failed = Boolean(data.error) || (data.exitCode !== undefined && data.exitCode !== 0);
+  const [expanded, setExpanded] = React.useState(true);
+  const output = data.output ?? '';
+  const long = output.split('\n').length > 24;
+  const dot = failed ? '#f87171' : running ? '#eab308' : '#4ade80';
+
+  return (
+    <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12, minWidth: 0 }}>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          title={expanded ? 'Collapse' : 'Expand'}
+          style={{ background: 'none', border: 0, color: '#8b8b94', cursor: 'pointer', font: 'inherit', padding: 0, width: 10, flexShrink: 0 }}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+        <span style={{ color: '#e4e4e7', flexShrink: 0 }}>!</span>
+        <span style={{ color: '#e4e4e7', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {data.command}
+        </span>
+        {data.excludeFromContext && (
+          <span
+            title="!! — the output is not added to the model's context"
+            style={{ flexShrink: 0, color: '#fbbf24', border: '1px solid #78350f', borderRadius: 4, padding: '0 4px', fontSize: 10 }}
+          >
+            no context
+          </span>
+        )}
+        {running && <span style={{ marginLeft: 'auto', color: '#8b8b94', flexShrink: 0 }}>running…</span>}
+        {!running && data.exitCode !== undefined && (
+          <span style={{ marginLeft: 'auto', flexShrink: 0, color: failed ? '#f87171' : '#8b8b94' }}>exit {data.exitCode}</span>
+        )}
+        {!running && data.exitCode === undefined && data.cancelled && (
+          <span style={{ marginLeft: 'auto', flexShrink: 0, color: '#f87171' }}>cancelled</span>
+        )}
+      </div>
+      {expanded && (
+        <div style={{ borderTop: '1px solid #2a2a30', padding: '8px 10px', minWidth: 0 }}>
+          {data.error ? (
+            <pre style={bashOutputStyle}>{data.error}</pre>
+          ) : output ? (
+            <>
+              <pre style={{ ...bashOutputStyle, maxHeight: long ? 260 : undefined, overflowY: long ? 'auto' : undefined }}>
+                {output}
+              </pre>
+              {data.truncated && (
+                <div style={{ color: '#71717a', fontSize: 11, marginTop: 4 }}>
+                  output truncated{data.fullOutputPath ? ` — full output in ${data.fullOutputPath}` : ''}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ color: '#71717a', fontSize: 11.5 }}>{running ? 'running…' : 'no output'}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const bashOutputStyle: React.CSSProperties = {
+  margin: 0,
+  fontFamily: Mono,
+  fontSize: 11.5,
+  lineHeight: 1.55,
+  color: '#d4d4d8',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
 };
 
 // ---------------------------------------------------------------------------
@@ -373,7 +572,6 @@ const FileChip = ({ path, line }: { path: string; line?: number }) => {
 // ---------------------------------------------------------------------------
 // Part renderers
 // ---------------------------------------------------------------------------
-const Mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
 // Composer chrome lives in CSS because ComposerPrimitive.Input's `style` prop
 // is typed for autosize height and rejects a plain CSSProperties object.
@@ -740,7 +938,12 @@ function CanvasThread() {
       <ErrorBanner />
       {/* ComposerPrimitive.Root renders the <form> — Enter submits via it. */}
       <ComposerPrimitive.Root style={styles.composer}>
-        <ComposerPrimitive.Input className="canvas-input" rows={1} autoFocus />
+        <ComposerPrimitive.Input
+          className="canvas-input"
+          rows={1}
+          autoFocus
+          placeholder="Message pi — or start with ! to run a shell command"
+        />
         <StopButton />
       </ComposerPrimitive.Root>
     </ThreadPrimitive.Root>
@@ -760,6 +963,7 @@ const AssistantMessage = () => (
         Text: TextPartView,
         Reasoning: ReasoningPartView,
         tools: { by_name: { edit: EditCard }, Fallback: ToolCard },
+        data: { by_name: { bash: BashCard } },
       }}
     />
     <div style={{ color: '#f87171', marginTop: 6 }}>

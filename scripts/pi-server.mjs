@@ -13,13 +13,16 @@
  * session switcher can watch) whichever sessions it cares about.
  *
  * Protocol (JSON, both directions; `sessionId` omitted = most recent session):
- *   in:  {"type":"open_session","sessionId"?,"mode"?:"new"|"continue"}
+ *   in:  {"type":"bash","sessionId"?,"command","excludeFromContext"?,"id"?}
+ *        {"type":"open_session","sessionId"?,"mode"?:"new"|"continue"}
  *        {"type":"list_sessions"}
  *        {"type":"close_session","sessionId"}
  *        {"type":"prompt","sessionId"?,"message"}
  *        {"type":"abort","sessionId"?}
  *   out: open_session → {"type":"session_opened","sessionId","sessionFile","history"}
  *        list_sessions → {"type":"sessions","sessions":[…]}
+ *        bash → {"type":"bash_start"} / SDK {"type":"bash_execution_update"}
+ *        → {"type":"bash_end","result"|"error"}
  *        plus SDK session events verbatim, each with `sessionId`, and
  *        {"type":"settled","sessionId","aborted"} | {"type":"server_error"}
  *
@@ -171,6 +174,26 @@ async function openSession({ sessionId, mode } = {}) {
   return entry;
 }
 
+/**
+ * Run a shell command the user typed with `!` (or `!!` to keep it out of the
+ * model's context). This is pi's own bash execution, not a tool call: the
+ * session records it as a bashExecution message, so `!ls` shows up in the
+ * transcript and the next prompt can see it.
+ */
+async function runBash(entry, { id, command, excludeFromContext }) {
+  broadcast({ type: 'bash_start', sessionId: entry.id, id, command, excludeFromContext });
+  console.log(`[pi-canvas-server] bash ${entry.id}: ${command}${excludeFromContext ? ' (no context)' : ''}`);
+  try {
+    // Output streams as the SDK's own bash_execution_update events, which the
+    // session subscription above already forwards with this `id`.
+    const result = await entry.session.executeBash(command, undefined, { excludeFromContext, id });
+    broadcast({ type: 'bash_end', sessionId: entry.id, id, command, excludeFromContext, bashResult: result });
+  } catch (err) {
+    console.error('[pi-canvas-server] bash failed:', String(err));
+    broadcast({ type: 'bash_end', sessionId: entry.id, id, command, excludeFromContext, error: String(err) });
+  }
+}
+
 /** Prompts are serialized per session, so different sessions run concurrently. */
 function promptSession(entry, message) {
   const run = { aborted: false };
@@ -305,9 +328,26 @@ async function handle(ws, data) {
       promptSession(entry, message);
       return;
     }
+    case 'bash': {
+      const command = String(cmd.command ?? '').trim();
+      if (!command) return;
+      const entry = resolve(cmd.sessionId);
+      if (!entry) {
+        reply(ws, { type: 'server_error', error: 'no session open — send open_session first' });
+        return;
+      }
+      void runBash(entry, {
+        id: cmd.id ? String(cmd.id) : undefined,
+        command,
+        excludeFromContext: Boolean(cmd.excludeFromContext),
+      });
+      return;
+    }
     case 'abort': {
       const entry = resolve(cmd.sessionId);
       if (!entry) return;
+      // A `!command` is not an agent turn, so it is cancelled its own way.
+      if (entry.session.isBashRunning) entry.session.abortBash();
       if (entry.activeRun) entry.activeRun.aborted = true;
       void entry.session.abort().catch((err) => console.error('[pi-canvas-server] abort failed:', err));
       return;

@@ -257,6 +257,30 @@ try {
     result.errorText = seen.slice(0, 500);
     if (process.env.E2E_SHOT) await window.screenshot({ path: process.env.E2E_SHOT });
   }
+  // `!command` runs a shell command instead of a prompt.
+  if (process.env.E2E_BASH) {
+    const box = frame.locator('textarea').first();
+    await box.fill(process.env.E2E_BASH);
+    await box.press('Enter');
+    const expect = process.env.E2E_BASH_EXPECT ?? 'exit 0';
+    let seen = '';
+    for (let i = 0; i < 60; i++) {
+      await window.waitForTimeout(1000);
+      seen = await frame.locator('body').innerText();
+      if (new RegExp(expect).test(seen)) break;
+    }
+    result.bashRan = new RegExp(expect).test(seen);
+    result.bashText = seen.slice(0, 600);
+    result.bashCommandEchoed = seen.includes(process.env.E2E_BASH.replace(/^!+/, '').trim());
+    if (process.env.E2E_SHOT) await window.screenshot({ path: process.env.E2E_SHOT });
+  }
+  // Assert on the finished transcript (used to prove replayed history, e.g. a
+  // `!command` card from an earlier run).
+  if (process.env.E2E_EXPECT_TEXT) {
+    const text = await frame.locator('body').innerText();
+    result.expectTextSeen = text.includes(process.env.E2E_EXPECT_TEXT);
+    result.expectTextBody = text.slice(0, 500);
+  }
   if (process.env.E2E_SHOT && !process.env.E2E_EXPECT_ERROR) {
     await window.screenshot({ path: process.env.E2E_SHOT });
     console.log('screenshot saved', process.env.E2E_SHOT);
