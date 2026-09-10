@@ -1,8 +1,16 @@
-.vscode/**
-src/**
-esbuild.mjs
-tsconfig.json
-node_modules/**
-**/*.map
-.gitignore
-**/*.log
+# Ship ONLY the runtime. Everything is excluded first, then the pieces the
+# extension needs at runtime are allowed back:
+#   - the compiled extension + webview assets
+#   - scripts/pi-server.mjs (the agent host)
+#   - the three vendored packages it loads (see piCanvas.vendored in package.json)
+**
+!package.json
+!LICENSE
+!README.md
+!THIRD-PARTY-NOTICES.md
+!dist/**
+!media/**
+!scripts/pi-server.mjs
+# The agent server's runtime deps, copied out of node_modules by
+# `npm run vendor` (vsce refuses to package node_modules at all).
+!vendor/**

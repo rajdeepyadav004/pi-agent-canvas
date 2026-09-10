@@ -1,7 +1,7 @@
 {
   "name": "pi-agent-canvas",
-  "displayName": "pi-agent-canvas",
-  "description": "Minimal, clutter-free agent canvas workspace. Opens a dedicated Webview 'window' with zero IDE chrome around it.",
+  "displayName": "Pi Agent Canvas",
+  "description": "A dedicated cockpit for the pi coding agent: conversations as editor tiles, files it touches opening in the editor, and a session list in the activity bar.",
   "version": "0.1.0",
   "publisher": "pi-labs",
   "private": true,
@@ -10,7 +10,9 @@
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Machine Learning",
+    "Visualization"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -94,10 +96,12 @@
     "canvas": "node scripts/run-canvas.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:isolated && npm run test:shared",
-    "package": "npm run build && vsce package --no-dependencies",
+    "package": "npm run build && npm run vendor && npm run notices && vsce package --no-dependencies",
     "test:isolated": "node ./test/runTest.js",
     "test:shared": "CANVAS_TEST_MODE=shared node ./test/runTest.js",
-    "precanvas": "node scripts/seed-profile.mjs"
+    "precanvas": "node scripts/seed-profile.mjs",
+    "notices": "node scripts/licenses.mjs",
+    "vendor": "node scripts/vendor.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -105,6 +109,7 @@
     "@types/react-dom": "^19.3.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.21.5",
     "mocha": "^12.0.0",
     "playwright": "^1.63.0",
@@ -119,5 +124,28 @@
     "react-dom": "^19.3.0",
     "remark-gfm": "^4.0.1",
     "ws": "^8.21.3"
+  },
+  "keywords": [
+    "agent",
+    "pi",
+    "ai",
+    "canvas",
+    "chat"
+  ],
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rajdeepyadav004/pi-agent-canvas.git"
+  },
+  "homepage": "https://github.com/rajdeepyadav004/pi-agent-canvas#readme",
+  "bugs": {
+    "url": "https://github.com/rajdeepyadav004/pi-agent-canvas/issues"
+  },
+  "piCanvas": {
+    "vendored": [
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/chord",
+      "ws"
+    ]
   }
 }

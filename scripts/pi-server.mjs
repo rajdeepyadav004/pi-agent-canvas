@@ -33,9 +33,11 @@
  * Run: node scripts/pi-server.mjs
  *   env: PI_CANVAS_PORT, PI_CANVAS_CWD, PI_CANVAS_SESSION_DIR
  */
-import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent';
 import { createServer } from 'node:http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
 
 const PORT = Number(process.env.PI_CANVAS_PORT ?? 47811);
 // The project the agent works in — the VS Code workspace folder, passed by the
@@ -45,6 +47,61 @@ const CWD = process.env.PI_CANVAS_CWD ?? process.cwd();
 // and `pi --continue` share one conversation); PI_CANVAS_SESSION_DIR redirects.
 const SESSION_DIR = process.env.PI_CANVAS_SESSION_DIR || undefined;
 
+const here = dirname(fileURLToPath(import.meta.url));
+/** What the .vsix ships: plain files, because vsce refuses node_modules. */
+const VENDOR = join(here, '..', 'vendor', 'node_modules');
+
+/**
+ * Import the first candidate that exists, else the bare specifier (dev install).
+ * Packages are loaded by path rather than by name because the packaged
+ * extension has no node_modules for Node to resolve through.
+ */
+async function importFirst(candidates, bare, label) {
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) {
+      console.log(`[pi-canvas-server] ${label}: ${candidate}`);
+      return import(pathToFileURL(candidate).href);
+    }
+  }
+  console.log(`[pi-canvas-server] ${label}: ${bare}`);
+  return import(bare);
+}
+
+/**
+ * The pi SDK comes from its PREBUILT BUNDLE, not the published entry point: the
+ * full package is ~157MB of provider SDKs, while `dist/bundle` is the
+ * embeddable build pi ships for exactly this (~8MB + @earendil-works/chord).
+ * That is what makes a self-contained .vsix possible.
+ */
+const piBundle = (...base) => join(...base, '@earendil-works', 'pi-coding-agent', 'dist', 'bundle', 'index.js');
+const { createAgentSession, ModelRuntime, SessionManager } = await importFirst(
+  [
+    process.env.PI_CANVAS_PI_ENTRY,
+    piBundle(join(here, '..', 'node_modules')), // dev checkout: always current
+    piBundle(VENDOR),                           // packaged .vsix
+    piBundle(join(CWD, 'node_modules')),        // the workspace's own pi
+    join(here, '..', 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'index.js'),
+  ],
+  '@earendil-works/pi-coding-agent',
+  'pi SDK',
+);
+
+// NOTE: ws's ESM entry is wrapper.mjs, NOT index.js. Loading the CommonJS
+// index.js by path yields a namespace without named exports, and WebSocketServer
+// comes back undefined ("not a constructor").
+const wsModule = await importFirst(
+  [
+    process.env.PI_CANVAS_WS_ENTRY,
+    join(here, '..', 'node_modules', 'ws', 'wrapper.mjs'),
+    join(VENDOR, 'ws', 'wrapper.mjs'),
+  ],
+  'ws',
+  'websocket',
+);
+const { WebSocketServer, WebSocket } = wsModule;
+if (typeof WebSocketServer !== 'function') {
+  throw new Error(`pi-canvas-server: could not load ws (got ${Object.keys(wsModule).join(', ') || 'no exports'})`);
+}
 const modelRuntime = await ModelRuntime.create();
 
 const clients = new Set();

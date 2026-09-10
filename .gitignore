@@ -5,3 +5,4 @@ dist/
 *.log
 .vscode/.devext/
 .vscode/.devdata/
+vendor/

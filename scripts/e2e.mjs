@@ -10,6 +10,7 @@
 import { _electron } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -26,9 +27,15 @@ process.on('exit', () => {
 });
 const result = { launched: false, frameFound: false, sent: false, replySeen: false, error: null };
 
+// E2E_INSTALLED=1 drives the PACKAGED extension (a .vsix installed into a clean
+// extensions dir) instead of the dev checkout — the only way to prove the
+// artifact works without node_modules present.
+const installed = process.env.E2E_INSTALLED === '1';
+const profileDir = process.env.E2E_USER_DIR ?? `${root}.vscode-test/user-data-e2e`;
+const extensionsDir = process.env.E2E_EXT_DIR ?? `${root}.vscode-test/extensions-e2e`;
+
 // The extension host's @vscode/proxy-agent patch is known to stall SSE
 // streaming; our E2E profile disables it. Dev-profile-only, never shipped.
-const profileDir = `${root}.vscode-test/user-data-e2e`;
 mkdirSync(`${profileDir}/User`, { recursive: true });
 writeFileSync(
   `${profileDir}/User/settings.json`,
@@ -36,14 +43,21 @@ writeFileSync(
 );
 
 try {
+  // Playwright drives a specific build: 1.137.0 dies on startup under Playwright
+  // (chrome-sandbox), so prefer the build the harness is known to work with and
+  // allow an explicit override.
+  const codeBin =
+    process.env.E2E_CODE_BIN ??
+    (existsSync(`${root}.vscode-test/vscode-linux-x64-1.136.1/code`)
+      ? `${root}.vscode-test/vscode-linux-x64-1.136.1/code`
+      : `${root}.vscode-test/vscode-linux-x64-1.137.0/code`);
   const app = await _electron.launch({
-    executablePath: `${root}.vscode-test/vscode-linux-x64-1.136.1/code`,
+    executablePath: codeBin,
     args: [
-      '--extensionDevelopmentPath=' + root,
-      '--disable-extensions',
+      ...(installed ? [] : ['--extensionDevelopmentPath=' + root, '--disable-extensions']),
       '--new-window',
-      '--user-data-dir=' + `${root}.vscode-test/user-data-e2e`,
-      '--extensions-dir=' + `${root}.vscode-test/extensions-e2e`,
+      '--user-data-dir=' + profileDir,
+      '--extensions-dir=' + extensionsDir,
       '--disable-workspace-trust',
     ],
     // Dedicated port so an already-running canvas window can't interfere (and
