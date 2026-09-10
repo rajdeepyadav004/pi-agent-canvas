@@ -31,6 +31,10 @@ import { SessionsTreeProvider, type SessionSummary } from './sessionsView';
 
 const ISOLATED = process.env.VSCODE_EXTENSION_ISOLATED === '1';
 const CHAT_KILL_KEY = 'chat.disableAIFeatures';
+/** Opt-in. Off means we write nothing at all. */
+const AI_SETTING = 'piCanvas.disableBuiltInAi';
+/** globalState marker: did WE turn chat.disableAIFeatures on? */
+const AI_OWNED_KEY = 'piCanvas.ownsAiFeaturesSetting';
 
 /**
  * This window's canvas server endpoint. Each VS Code window gets its own port
@@ -46,7 +50,12 @@ const wsUrl = () => `ws://127.0.0.1:${PI_PORT}`;
 
 export async function activate(context: vscode.ExtensionContext): Promise<PiCanvasApi> {
   extensionUri = context.extensionUri;
-  void disableAiFeatures();
+  void applyAiPreference(context);
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(AI_SETTING)) void applyAiPreference(context);
+    }),
+  );
 
   PI_PORT = process.env.PI_CANVAS_PORT ?? String(await freePort());
   startPiServer();
@@ -276,14 +285,31 @@ function fetchSessions(): Promise<SessionSummary[]> {
   });
 }
 
-/** Idempotently disable built-in AI/chat in whatever window we run in. */
-async function disableAiFeatures(): Promise<void> {
+/**
+ * Honour `piCanvas.disableBuiltInAi` — the ONLY setting this extension ever
+ * writes, and only when the user asks for it.
+ *
+ * Turning it off restores `chat.disableAIFeatures` only if we were the ones who
+ * set it (tracked in globalState). Leaving someone's Copilot chat disabled after
+ * they unticked our box would be a bug; flipping back a setting they had already
+ * chosen themselves would be a different one.
+ */
+async function applyAiPreference(context: vscode.ExtensionContext): Promise<void> {
+  const config = vscode.workspace.getConfiguration();
+  const wanted = config.get<boolean>(AI_SETTING) === true;
+  const current = config.get<boolean>(CHAT_KILL_KEY) === true;
+  const ownedByUs = context.globalState.get<boolean>(AI_OWNED_KEY) === true;
+
   try {
-    const config = vscode.workspace.getConfiguration();
-    if (config.get(CHAT_KILL_KEY) === true) return; // already off — no write
-    await config.update(CHAT_KILL_KEY, true, vscode.ConfigurationTarget.Global);
+    if (wanted && !current) {
+      await config.update(CHAT_KILL_KEY, true, vscode.ConfigurationTarget.Global);
+      await context.globalState.update(AI_OWNED_KEY, true);
+    } else if (!wanted && current && ownedByUs) {
+      await config.update(CHAT_KILL_KEY, false, vscode.ConfigurationTarget.Global);
+      await context.globalState.update(AI_OWNED_KEY, false);
+    }
   } catch (err) {
-    console.warn(`[pi-agent-canvas] ${CHAT_KILL_KEY} update failed:`, err);
+    console.warn(`[pi-agent-canvas] could not apply ${AI_SETTING}:`, err);
   }
 }
 

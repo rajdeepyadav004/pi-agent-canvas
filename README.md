@@ -30,6 +30,8 @@ produced them.
 ## Requirements
 
 - **VS Code 1.85 or newer.**
+- Optional: **`piCanvas.disableBuiltInAi`** (off by default) to have the canvas
+  disable VS Code's built-in AI/chat, which it replaces.
 - **Node.js on `PATH`.** The agent runs as a plain Node process beside VS Code
   (see *How it works* below).
 - **pi credentials.** The canvas uses pi's own configuration and login, so if
@@ -47,9 +49,11 @@ Then click the robot face in the activity bar, or press
 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd> (<kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd>
 on macOS) to open a canvas.
 
-> The extension sets `chat.disableAIFeatures: true`, once. That is the official
-> switch for VS Code's built-in AI/chat and the Copilot extensions, which this
-> canvas replaces. It is the only setting the extension ever writes.
+> By default the extension writes **nothing** to your settings. If you want it
+> to switch off VS Code's built-in AI/chat and the Copilot extensions (the
+> official `chat.disableAIFeatures` switch, since this canvas replaces them),
+> turn on **`piCanvas.disableBuiltInAi`**. Turn it back off and the setting is
+> restored if the extension was the one that changed it.
 
 ## How it works
 

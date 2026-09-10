@@ -24,9 +24,14 @@ const KIOSK_VALUES = {
   'chat.agent.enabled': false,
 };
 
-/** The extension EXPECTEDLY writes chat.disableAIFeatures:true in every
- *  window (by design — the canvas is agent-free), so both suites assert it. */
+/**
+ * chat.disableAIFeatures is OPT-IN (piCanvas.disableBuiltInAi, default false):
+ * a default install must write nothing. The isolated dev window is the
+ * exception — its seed script sets it for the throwaway profile.
+ */
 const AI_FEATURES_OFF = { 'chat.disableAIFeatures': true };
+/** A default (shared, real-user) window must have the key exactly as it found it. */
+const AI_FEATURES_UNTOUCHED = { 'chat.disableAIFeatures': false };
 async function assertChromeUntouched(label, expectedOverrides = {}) {
   for (const [key, kiosk] of Object.entries(KIOSK_VALUES)) {
     const actual = await vscode.workspace.getConfiguration().get(key);
@@ -46,4 +51,4 @@ async function assertChromeUntouched(label, expectedOverrides = {}) {
   }
 }
 
-module.exports = { assertChromeUntouched, KIOSK_VALUES, AI_FEATURES_OFF };
+module.exports = { assertChromeUntouched, KIOSK_VALUES, AI_FEATURES_OFF, AI_FEATURES_UNTOUCHED };

@@ -23,6 +23,10 @@ Check/update the current cycle there before planning or reporting status.
   extension now contributes exactly ONE activity-bar container + ONE view
   (Sessions). Everything else stays as strict as before: no other views, and no
   chrome/window setting is ever written (still covered by `test/suite/chromeSafety.js`).
+- **Publishing changes the AI kill switch (2026-09-10):** writing
+  `chat.disableAIFeatures` for everyone who installs is not acceptable in a
+  public extension, so it became the opt-in `piCanvas.disableBuiltInAi`
+  setting. `test:shared` asserts a default install writes nothing at all.
 - **Always anchor status to the active cycle** in Plane: when a milestone lands,
   update the cycle's description / add a work item; when starting work, confirm
   which cycle it belongs to (create a new cycle via `plane_cycle create` if none fits).

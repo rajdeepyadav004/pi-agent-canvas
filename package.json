@@ -4,7 +4,6 @@
   "description": "A dedicated cockpit for the pi coding agent: conversations as editor tiles, files it touches opening in the editor, and a session list in the activity bar.",
   "version": "0.1.0",
   "publisher": "pi-labs",
-  "private": true,
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -16,7 +15,12 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "*"
+    "onStartupFinished",
+    "onView:piAgentCanvas.sessions",
+    "onCommand:piAgentCanvas.open",
+    "onCommand:piAgentCanvas.newSession",
+    "onCommand:piAgentCanvas.openSession",
+    "onCommand:piAgentCanvas.refreshSessions"
   ],
   "contributes": {
     "commands": [
@@ -88,6 +92,17 @@
           "group": "navigation@2"
         }
       ]
+    },
+    "configuration": {
+      "title": "Pi Agent Canvas",
+      "properties": {
+        "piCanvas.disableBuiltInAi": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Disable VS Code's built-in AI/chat and the Copilot extensions (`chat.disableAIFeatures`), because this canvas replaces them. **Off by default** \u2014 this is the only VS Code setting the extension ever writes, and only when you turn this on. Turning it back off restores the setting if the extension was the one that changed it.",
+          "scope": "application"
+        }
+      }
     }
   },
   "scripts": {
