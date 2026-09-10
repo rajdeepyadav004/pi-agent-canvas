@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { existsSync } from 'node:fs';
 import { get } from 'node:http';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { CanvasPanel } from './canvasPanel';
 import { initLog, log, pipeToLog, recentLogs, showLog } from './log';
 import { explainError } from './shared/explain';
@@ -35,6 +36,9 @@ const ISOLATED = process.env.VSCODE_EXTENSION_ISOLATED === '1';
 const CHAT_KILL_KEY = 'chat.disableAIFeatures';
 /** Opt-in. Off means we write nothing at all. */
 const AI_SETTING = 'piCanvas.disableBuiltInAi';
+/** How the agent is launched, and where it runs. */
+const AGENT_COMMAND_SETTING = 'piCanvas.agentCommand';
+const AGENT_CWD_SETTING = 'piCanvas.agentCwd';
 /** globalState marker: did WE turn chat.disableAIFeatures on? */
 const AI_OWNED_KEY = 'piCanvas.ownsAiFeaturesSetting';
 
@@ -57,6 +61,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<PiCanv
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration(AI_SETTING)) void applyAiPreference(context);
+      // Both settings describe how to LAUNCH the agent, so the running server is
+      // stale the moment they change. Restart it on the same port: the canvases
+      // reconnect themselves.
+      if (event.affectsConfiguration(AGENT_COMMAND_SETTING) || event.affectsConfiguration(AGENT_CWD_SETTING)) {
+        log('launch settings changed — restarting the agent server');
+        restartPiServer();
+        sessions.refreshSoon(1500);
+      }
     }),
   );
 
@@ -239,31 +251,83 @@ function freePort(): Promise<number> {
  * because VS Code patches fetch/http there and SSE streaming stalls. Spawned
  * detached (own session) so it survives window reloads.
  */
+/** The configured directory the agent works in, or the workspace folder. */
+function agentCwd(): string | undefined {
+  const configured = (vscode.workspace.getConfiguration().get<string>(AGENT_CWD_SETTING) ?? '').trim();
+  if (!configured) return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const expanded = configured.startsWith('~') ? join(homedir(), configured.slice(1)) : configured;
+  return isAbsolute(expanded) ? expanded : join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? homedir(), expanded);
+}
+
+let restartTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Kill the running server so the next start uses current settings. Debounced:
+ * changing two launch settings in a row must not start two servers onto the same
+ * port.
+ */
+function restartPiServer(): void {
+  const running = serverProc;
+  serverProc = undefined;
+  running?.kill();
+  if (restartTimer) clearTimeout(restartTimer);
+  // Give the port back before the replacement tries to bind it.
+  restartTimer = setTimeout(() => {
+    restartTimer = undefined;
+    startPiServer();
+  }, 600);
+}
+
 function startPiServer(): void {
   if (serverProc) return;
   const serverPath = join(__dirname, '..', 'scripts', 'pi-server.mjs');
   if (!existsSync(serverPath)) return;
-  // The agent works in the user's open project, not the extension folder.
-  // Note: PI_CANVAS_SESSION_DIR / PI_CANVAS_NEW_SESSION are inherited from this
-  // process's environment (see scripts/pi-server.mjs); sessions otherwise live
-  // in pi's own session directory, so the canvas and `pi --continue` agree.
-  const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  log(`starting agent server: node ${serverPath}`);
+  // The agent works in the user's project (or wherever they pointed it), not in
+  // the extension folder. Note: PI_CANVAS_SESSION_DIR / PI_CANVAS_NEW_SESSION are
+  // inherited from this process's environment (see scripts/pi-server.mjs);
+  // sessions otherwise live in pi's own session directory, so the canvas and
+  // `pi --continue` agree.
+  const workspaceCwd = agentCwd();
+  if (workspaceCwd && !existsSync(workspaceCwd)) {
+    log(`configured ${AGENT_CWD_SETTING} does not exist: ${workspaceCwd}`);
+    void vscode.window.showWarningMessage(
+      `Pi Agent Canvas: ${AGENT_CWD_SETTING} points at a directory that does not exist (${workspaceCwd}).`,
+    );
+  }
+
+  const env = {
+    ...process.env,
+    PI_CANVAS_PORT: PI_PORT,
+    // Handed to a custom command so a wrapper can exec the bundled server
+    // without having to know where the extension is installed.
+    PI_CANVAS_SERVER: serverPath,
+    PI_CANVAS_EXTENSION: join(__dirname, '..'),
+    ...(workspaceCwd ? { PI_CANVAS_CWD: workspaceCwd } : {}),
+  };
+
+  const custom = (vscode.workspace.getConfiguration().get<string>(AGENT_COMMAND_SETTING) ?? '').trim();
+  log(custom ? `starting agent server with ${AGENT_COMMAND_SETTING}: ${custom}` : `starting agent server: node ${serverPath}`);
   log(`  port ${PI_PORT} · cwd ${workspaceCwd ?? '(none — the extension folder)'} · node ${process.version}`);
   log(`  PATH ${process.env.PATH ?? '(unset)'}`);
 
-  const child = spawn('node', [serverPath], {
-    cwd: join(__dirname, '..'),
-    env: {
-      ...process.env,
-      PI_CANVAS_PORT: PI_PORT,
-      ...(workspaceCwd ? { PI_CANVAS_CWD: workspaceCwd } : {}),
-    },
-    detached: true,
-    // Piped, not ignored: without this the server's errors are invisible and
-    // "the agent isn't replying" has no explanation anywhere.
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = custom
+    // Through the shell, from the agent's directory: that is what makes "a login
+    // shell / a specific node / a wrapper that exports credentials" possible.
+    ? spawn(custom, {
+        cwd: workspaceCwd ?? join(__dirname, '..'),
+        env,
+        shell: true,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    : spawn('node', [serverPath], {
+        cwd: join(__dirname, '..'),
+        env,
+        detached: true,
+        // Piped, not ignored: without this the server's errors are invisible and
+        // "the agent isn't replying" has no explanation anywhere.
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
   child.unref();
   serverProc = child;
   pipeToLog(child.stdout, '[server]');

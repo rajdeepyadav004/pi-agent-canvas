@@ -127,6 +127,48 @@ reply, diffs, abort, session replay, file chips).
 └── test/suite/            # chrome-safety + integration suites
 ```
 
+## Configuration
+
+Two settings, both about **how the agent is launched**. Neither is needed unless
+your machine needs it.
+
+### `piCanvas.agentCwd` — where the agent runs
+
+Empty by default, which means the first workspace folder. pi finds its project
+context (`AGENTS.md`), its extensions and its session store relative to the
+working directory, so if the agent only behaves correctly in one repository,
+point this at it:
+
+```json
+{ "piCanvas.agentCwd": "/Users/me/work/agent-sandbox" }
+```
+
+`~` is expanded, and relative paths resolve against the workspace folder. The
+Sessions view follows: it lists the conversations belonging to this directory.
+
+### `piCanvas.agentCommand` — how the agent is started
+
+Empty by default, which means `node <extension>/scripts/pi-server.mjs`. Set it
+when the agent needs a particular environment — a login shell, a specific
+Node.js, or a wrapper that exports credentials:
+
+```json
+{ "piCanvas.agentCommand": "bash -lc 'exec node \"$PI_CANVAS_SERVER\"'" }
+```
+
+The command runs through your shell from `piCanvas.agentCwd`, with these already
+in its environment:
+
+| Variable | Meaning |
+| --- | --- |
+| `PI_CANVAS_SERVER` | absolute path to the bundled server, so a wrapper can exec it |
+| `PI_CANVAS_EXTENSION` | the extension's install directory |
+| `PI_CANVAS_CWD` | the agent's working directory |
+| `PI_CANVAS_PORT` | the port the server must listen on |
+
+Changing either setting restarts the agent server on the same port; open
+canvases reconnect themselves.
+
 ## Troubleshooting: the agent isn't replying
 
 Two things to check, in order.
@@ -149,6 +191,8 @@ The most common causes:
 | --- | --- |
 | Diagnostics says *"No API key found for the selected model"* | That machine has never logged into pi. Run `pi` in a terminal and use `/login`. The canvas shares pi's credentials. |
 | Diagnostics cannot start the server, or the log shows `spawn node ENOENT` | VS Code cannot find `node`. On macOS, a VS Code launched from the Dock does not inherit your shell's `PATH`, so nvm/Homebrew-installed Node is invisible. Launch it from a terminal, or fix `PATH` for GUI apps. |
+| The agent replies in one folder but not another | pi keys project context, extensions and sessions off its working directory. Set `piCanvas.agentCwd` to the folder where it behaves. |
+| `node` is missing/old, or credentials come from a wrapper | Set `piCanvas.agentCommand` to a login shell or your own wrapper (`PI_CANVAS_SERVER` is provided in its environment). |
 | Diagnostics says *HUNG* with no reply | The model request never completed — a network, VPN or proxy problem. A child process inherits VS Code's proxy environment; compare the proxy variables the diagnostics print. |
 
 The canvas needs **no** machine-specific configuration: everything is relative to

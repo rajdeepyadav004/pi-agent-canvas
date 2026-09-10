@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Shell commands from the composer.** Type `!command` to run it instead of
+  prompting the agent, and `!!command` to run it while keeping the output out of
+  the model's context. It uses pi's own bash execution, so commands inherit pi's
+  shell settings, output truncation and session record; output streams into a
+  card with the exit code, and the card replays from history after a reload. The
+  stop control cancels a running command.
+- **`piCanvas.agentCwd`** — the directory the agent runs in, defaulting to the
+  first workspace folder. pi keys its project context, extensions and session
+  store off the working directory, so this is the fix when the agent only
+  behaves in one repository.
+- **`piCanvas.agentCommand`** — how the agent server is launched, for machines
+  that need a login shell, a specific Node.js, or a wrapper that exports
+  credentials. `PI_CANVAS_SERVER`, `PI_CANVAS_EXTENSION`, `PI_CANVAS_CWD` and
+  `PI_CANVAS_PORT` are provided in its environment. Changing either launch
+  setting restarts the server on the same port.
+
 ## [0.1.2] — 2026-09-10
 
 ### Added

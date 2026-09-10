@@ -11,6 +11,9 @@
 'use strict';
 const assert = require('node:assert');
 const vscode = require('vscode');
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+const { tmpdir } = require('node:os');
 
 const mode = process.env.CANVAS_TEST_MODE || 'isolated';
 const suite = mode === 'isolated' ? describe : describe.skip;
@@ -167,6 +170,42 @@ suite('pi-agent-canvas sessions view', function () {
       before,
       'a stale session row must not open a panel that can never load',
     );
+  });
+
+  it('honours a configured launch command and working directory', async function () {
+    // The point of these settings: on a machine where the agent only behaves in
+    // one repository, the launch is configurable. A wrapper proves both that it
+    // ran and what environment it was given.
+    const dir = join(tmpdir(), `pi-canvas-cwd-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const marker = join(dir, 'launched.txt');
+    const wrapper = join(dir, 'wrapper.sh');
+    writeFileSync(
+      wrapper,
+      `#!/bin/bash\nprintf '%s' "$PI_CANVAS_CWD" > "${marker}"\nexec node "$PI_CANVAS_SERVER"\n`,
+      { mode: 0o755 },
+    );
+
+    const config = vscode.workspace.getConfiguration('piCanvas');
+    try {
+      await config.update('agentCwd', dir, vscode.ConfigurationTarget.Global);
+      await config.update('agentCommand', `bash "${wrapper}"`, vscode.ConfigurationTarget.Global);
+
+      await waitFor(() => existsSync(marker), 40_000, 'the configured launch command to run');
+      assert.strictEqual(
+        readFileSync(marker, 'utf8').trim(),
+        dir,
+        'the launched command must see the configured working directory',
+      );
+      // …and the server it exec'd must be the one answering, on the same port.
+      await waitFor(async () => { await api.sessions(); return true; }, 40_000, 'the wrapped server to answer');
+      assert.ok(api.recentLogs().some((l) => l.includes('agentCommand')), 'the log should say which command was used');
+    } finally {
+      await config.update('agentCommand', undefined, vscode.ConfigurationTarget.Global);
+      await config.update('agentCwd', undefined, vscode.ConfigurationTarget.Global);
+    }
+    // Back on the built-in launch.
+    await waitFor(async () => { await api.sessions(); return true; }, 40_000, 'the default server to answer again');
   });
 
   it('gives a new session its own panel', async () => {
