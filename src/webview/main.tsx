@@ -46,6 +46,8 @@ type PiEvent = {
   messages?: WireMessage[];
   aborted?: boolean;
   sessionFile?: string | null;
+  sessionId?: string;
+  history?: WireMessage[];
 };
 
 // Injected by the extension (media/index.html) — one server per window.
@@ -54,11 +56,25 @@ const WS_URL = window.__PI_CANVAS_WS__ ?? 'ws://127.0.0.1:47811';
 const piEventListeners = new Set<(event: PiEvent) => void>();
 
 let socket: WebSocket | null = null;
+
+/**
+ * The conversation this canvas is showing. Asked for on every connect: the
+ * server is a session host, so a canvas tab owns one session and a second tab
+ * can own another (or rejoin this one by id).
+ */
+let activeSessionId: string | undefined;
+
 function connect() {
   socket = new WebSocket(WS_URL);
+  socket.onopen = () => {
+    // 'continue' = pick up where this workspace left off. Tabs (next step)
+    // will ask for a specific sessionId, or for a brand new session.
+    sendToPi({ type: 'open_session', mode: 'continue' });
+  };
   socket.onmessage = (ev) => {
     try {
       const event = JSON.parse(ev.data as string) as PiEvent;
+      if (event.type === 'session_opened') activeSessionId = event.sessionId;
       for (const l of piEventListeners) l(event);
     } catch { /* ignore malformed lines */ }
   };
@@ -201,6 +217,8 @@ const PiAdapter: ChatModelAdapter = {
     };
 
     const listener = (event: PiEvent) => {
+      // The socket carries every live session; only ours belongs here.
+      if (event.sessionId && activeSessionId && event.sessionId !== activeSessionId) return;
       switch (event.type) {
         case 'message_update': {
           const ev = event.assistantMessageEvent;
@@ -258,13 +276,13 @@ const PiAdapter: ChatModelAdapter = {
     // for us, so without notify() this await would hold the turn open until
     // some unrelated event arrived.
     const onAbort = () => {
-      sendToPi({ type: 'abort' });
+      sendToPi({ type: 'abort', sessionId: activeSessionId });
       notify();
     };
     abortSignal.addEventListener('abort', onAbort);
 
     try {
-      if (!sendToPi({ type: 'prompt', message: prompt })) {
+      if (!sendToPi({ type: 'prompt', message: prompt, sessionId: activeSessionId })) {
         throw new Error('pi-canvas-server is not connected — is the canvas window still starting?');
       }
 
@@ -283,6 +301,56 @@ const PiAdapter: ChatModelAdapter = {
 };
 
 // ---------------------------------------------------------------------------
+// File tiles
+//
+// The agent's file references render as chips. Clicking one opens that file in
+// the editor area (reusing its tab) — the reason this canvas lives in VS Code
+// rather than in a terminal: the conversation and the code it touches are in
+// the same place.
+// ---------------------------------------------------------------------------
+/** Ask the extension host to reveal a path in the editor. */
+function openInEditor(path: string, line?: number): void {
+  vsapi().postMessage({ type: 'openFile', path, line });
+}
+
+/** File paths in tool args live under a few names. */
+function fileOf(args: unknown): string | undefined {
+  return pathOf(args);
+}
+
+const FileChip = ({ path, line }: { path: string; line?: number }) => {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <button
+      type="button"
+      className="canvas-file"
+      title={`Open ${path} in the editor`}
+      onClick={() => openInEditor(path, line)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: 'none',
+        border: 0,
+        borderRadius: 3,
+        padding: '0 3px',
+        margin: '0 -3px',
+        font: 'inherit',
+        cursor: 'pointer',
+        color: hover ? '#93c5fd' : '#a1a1aa',
+        textDecoration: hover ? 'underline' : 'none',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        minWidth: 0,
+        textAlign: 'left',
+      }}
+    >
+      {path}
+    </button>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Part renderers
 // ---------------------------------------------------------------------------
 const Mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -296,9 +364,9 @@ const uiCss = `
 }
 .canvas-input:focus { border-color: #52525b; }
 .canvas-stop {
-  display: flex; align-items: center; gap: 6px; flex: none;
-  background: #27272a; border: 1px solid #3f3f46; border-radius: 8px;
-  color: #e4e4e7; padding: 8px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 34px; height: 34px;
+  background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; cursor: pointer;
 }
 .canvas-stop:hover { background: #3f3f46; }
 .canvas-stop-glyph { width: 8px; height: 8px; background: #f87171; border-radius: 2px; }
@@ -407,12 +475,14 @@ function ResultBody({ result }: { result: unknown }): React.ReactElement | null 
 const ToolCard = ({ toolName, args, result, isError, status }: ToolCallMessagePartProps) => {
   const running = status?.type === 'running';
   const dot = isError ? '#f87171' : running ? '#eab308' : '#4ade80';
-  const detail = summarizeArgs(args) || summarizeArgs(result);
+  const file = fileOf(args);
+  const detail = file ? undefined : summarizeArgs(args) || summarizeArgs(result);
   return (
     <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12, minWidth: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
         <span style={{ color: '#e4e4e7', flexShrink: 0 }}>{toolName}</span>
+        {file && <FileChip path={file} />}
         {detail && (
           /* minWidth:0 lets the nowrap line actually shrink + ellipsise instead
              of forcing the whole thread to scroll sideways. */
@@ -547,7 +617,7 @@ const EditCard = ({ args, result, isError, status }: ToolCallMessagePartProps) =
         </button>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
         <span style={{ color: '#e4e4e7', flexShrink: 0 }}>edit</span>
-        <span style={{ color: '#8b8b94', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{file}</span>
+        <FileChip path={file} />
         {stats && (
           <span style={{ flexShrink: 0 }}>
             <span style={{ color: '#4ade80' }}>+{stats.added}</span>{' '}
@@ -648,9 +718,14 @@ function StopButton() {
   const running = useAuiState((s) => s.thread.isRunning);
   if (!running) return null;
   return (
-    <button type="button" className="canvas-stop" title="Stop (Esc)" onClick={() => aui.thread.cancelRun()}>
+    <button
+      type="button"
+      className="canvas-stop"
+      title="Stop"
+      aria-label="Stop"
+      onClick={() => aui.thread.cancelRun()}
+    >
       <span className="canvas-stop-glyph" />
-      stop
     </button>
   );
 }
@@ -677,11 +752,11 @@ function App() {
 
   React.useEffect(() => {
     const listener = (event: PiEvent) => {
-      if (event.type !== 'history') return;
+      if (event.type !== 'session_opened') return;
       // Hydrate once, from the first replay. Later replays (a reconnect) must
       // not rebuild the runtime: remounting throws away the thread and any
       // run already in flight. The agent's context lives server-side anyway.
-      setInitial((prev) => prev ?? historyToThreadMessages(Array.isArray(event.messages) ? event.messages : []));
+      setInitial((prev) => prev ?? historyToThreadMessages(event.history ?? []));
     };
     piEventListeners.add(listener);
     return () => { piEventListeners.delete(listener); };

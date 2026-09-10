@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 /**
  * Owns the single canvas WebviewPanel (one instance, reused when the command
@@ -96,6 +96,10 @@ export class CanvasPanel {
   private async handleMessage(msg: unknown): Promise<void> {
     const message = msg as { type?: string; [k: string]: unknown };
     switch (message.type) {
+      case 'openFile': {
+        await openInEditor(message.path, message.line);
+        break;
+      }
       case 'ping': {
         this.post({
           type: 'pong',
@@ -125,6 +129,39 @@ export class CanvasPanel {
       this.disposables.pop()?.dispose();
     }
   }
+}
+
+/**
+ * Open a file the agent touched, in the editor area. `preview: true` reuses an
+ * existing tab for that file instead of stacking duplicates — the standard
+ * file-tab behaviour the canvas leans on for its file tiles.
+ */
+async function openInEditor(filePath: unknown, line: unknown): Promise<void> {
+  if (typeof filePath !== 'string' || !filePath) return;
+  const uri = resolveUri(filePath);
+  if (!uri) {
+    void vscode.window.showWarningMessage(`pi-agent-canvas: cannot resolve ${filePath}`);
+    return;
+  }
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+    if (typeof line === 'number' && line > 0) {
+      const position = new vscode.Position(Math.max(0, line - 1), 0);
+      editor.selection = new vscode.Selection(position, position);
+      editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
+  } catch (err) {
+    void vscode.window.showWarningMessage(`pi-agent-canvas: cannot open ${filePath} — ${String(err)}`);
+  }
+}
+
+/** Absolute paths and URIs pass through; relative paths resolve to the workspace. */
+function resolveUri(filePath: string): vscode.Uri | undefined {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(filePath)) return vscode.Uri.parse(filePath);
+  if (isAbsolute(filePath)) return vscode.Uri.file(filePath);
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+  return root ? vscode.Uri.joinPath(root, filePath) : undefined;
 }
 
 function getNonce(): string {

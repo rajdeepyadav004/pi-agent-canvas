@@ -115,7 +115,17 @@ try {
       await window.waitForTimeout(500);
     }
     if (result.stopButtonSeen) {
+      await dismissToasts();
       await stop.first().click({ force: true });
+      await window.waitForTimeout(2500);
+      // VS Code toasts sit exactly over the composer's bottom-right corner, so a
+      // coordinate click can land on the toast instead. Fall back to a direct
+      // element click (same handler, no mouse) and record which path worked.
+      result.stopClickMode = 'mouse';
+      if ((await frame.locator('button.canvas-stop').count()) > 0) {
+        result.stopClickMode = 'element';
+        await frame.evaluate(() => document.querySelector('button.canvas-stop')?.click());
+      }
       for (let i = 0; i < 30; i++) {
         await window.waitForTimeout(500);
         if ((await frame.locator('button.canvas-stop').count()) === 0) break;
@@ -176,6 +186,23 @@ try {
     await window.mouse.move(600, 500);
     await window.mouse.wheel(0, Number(process.env.E2E_SCROLL));
     await window.waitForTimeout(800);
+  }
+  // File tile → editor tab: clicking a file chip must open the file in the
+  // editor area (reusing its tab), which is the point of the VS Code host.
+  if (process.env.E2E_CLICK_FILE) {
+    const name = process.env.E2E_CLICK_FILE;
+    const chip = frame.locator('button.canvas-file', { hasText: name }).first();
+    try {
+      await chip.waitFor({ state: 'visible', timeout: 20_000 });
+      result.fileChipSeen = true;
+      await dismissToasts();
+      await chip.click({ force: true });
+      await window.waitForTimeout(3000);
+      result.fileTabTitles = await window.locator('.tabs-container .tab').allInnerTexts();
+      result.fileTabOpened = result.fileTabTitles.some((t) => t.includes(name));
+    } catch (err) {
+      result.fileChipError = String(err).slice(0, 200);
+    }
   }
   if (process.env.E2E_SHOT) {
     await window.screenshot({ path: process.env.E2E_SHOT });
