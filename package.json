@@ -59,7 +59,7 @@
     "@assistant-ui/react": "^0.15.18",
     "@assistant-ui/react-markdown": "^0.14.14",
     "@earendil-works/pi-coding-agent": "^0.85.1",
-    "diff2html": "^3.4.56",
+    "@git-diff-view/react": "^0.1.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "remark-gfm": "^4.0.1",

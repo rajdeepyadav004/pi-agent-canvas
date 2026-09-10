@@ -21,8 +21,8 @@ import {
 } from '@assistant-ui/react';
 import { MarkdownTextPrimitive, type CodeHeaderProps } from '@assistant-ui/react-markdown';
 import remarkGfm from 'remark-gfm';
-import { html as renderDiff } from 'diff2html';
-import diff2htmlCss from 'diff2html/bundles/css/diff2html.min.css';
+import { DiffView, DiffModeEnum } from '@git-diff-view/react';
+import diffusionCss from '@git-diff-view/react/styles/diff-view.css';
 
 // ---------------------------------------------------------------------------
 // pi transport: direct WebSocket to pi-canvas-server.
@@ -201,37 +201,10 @@ const uiCss = `
 .canvas-input:focus { border-color: #52525b; }
 `;
 
-// diff2html ships its own stylesheet; we render its dark palette and hide the
-// file header it draws (the card supplies its own header).
-//
-// NB: diff2html positions its line numbers `position: absolute` but never sets
-// a positioned ancestor, so they would anchor to #root (position: fixed) and
-// stay glued to the viewport while the diff scrolls. Each line therefore gets
-// `position: relative` to anchor its own number.
-const diffCss = `
-${diff2htmlCss}
-.canvas-diff .d2h-file-header { display: none; }
-.canvas-diff .d2h-file-wrapper { border: 0; margin: 0; }
-.canvas-diff .d2h-file-diff { overflow: visible; }
-.canvas-diff .d2h-code-line,
-.canvas-diff .d2h-code-side-line,
-.canvas-diff .d2h-code-linenumber,
-.canvas-diff .d2h-code-side-linenumber { position: relative; }
-.canvas-diff .d2h-code-linenumber,
-.canvas-diff .d2h-code-side-linenumber { left: 0; }
-.canvas-diff .d2h-code-side-linenumber,
-.canvas-diff .d2h-code-linenumber { font-size: 10.5px; }
-.canvas-diff .d2h-code-line, .canvas-diff .d2h-code-side-line { font-family: ${Mono}; font-size: 11.5px; }
-.canvas-diff table.d2h-diff-table { font-size: 11.5px; table-layout: fixed; }
-.canvas-diff .d2h-del { background: #3a1d1d; }
-.canvas-diff .d2h-ins { background: #12301c; }
-.canvas-diff .d2h-info { background: #1b1b20; color: #8b8b94; }
-.canvas-diff .d2h-file-side-diff { vertical-align: top; }
-`;
-
 // Markdown styling for assistant text. Scoped to .canvas-md so it can't leak
 // into the tool cards / composer chrome.
 const markdownCss = `
+.canvas-md { max-width: 900px; }
 .canvas-md > *:first-child { margin-top: 0; }
 .canvas-md > *:last-child { margin-bottom: 0; }
 .canvas-md p { margin: 0 0 10px; }
@@ -333,16 +306,18 @@ const ToolCard = ({ toolName, args, result, isError, status }: ToolCallMessagePa
   const dot = isError ? '#f87171' : running ? '#eab308' : '#4ade80';
   const detail = summarizeArgs(args) || summarizeArgs(result);
   return (
-    <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12 }}>
+    <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12, minWidth: 0 }}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
-        <span style={{ color: '#e4e4e7' }}>{toolName}</span>
+        <span style={{ color: '#e4e4e7', flexShrink: 0 }}>{toolName}</span>
         {detail && (
-          <span style={{ color: '#8b8b94', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          /* minWidth:0 lets the nowrap line actually shrink + ellipsise instead
+             of forcing the whole thread to scroll sideways. */
+          <span style={{ color: '#8b8b94', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {detail.length > 120 ? `${detail.slice(0, 120)}…` : detail}
           </span>
         )}
-        {running && <span style={{ marginLeft: 'auto', color: '#8b8b94' }}>running…</span>}
+        {running && <span style={{ marginLeft: 'auto', color: '#8b8b94', flexShrink: 0 }}>running…</span>}
       </div>
       {(result !== undefined || isError) && (
         <div style={{ padding: '0 10px 8px' }}>
@@ -357,8 +332,11 @@ const ToolCard = ({ toolName, args, result, isError, status }: ToolCallMessagePa
 };
 
 // ---------------------------------------------------------------------------
-// Edit card — pi's edit tool returns a unified patch in result.details.patch,
-// so the diff renders from the patch itself (line-by-line or side-by-side).
+// Edit card — pi's edit tool returns a unified patch in result.details.patch.
+// It renders through @git-diff-view/react (MIT): a purpose-built git-diff
+// renderer with real split/unified modes, syntax highlighting and line numbers
+// taken from the hunk headers. Its CSS uses no absolute positioning and no
+// global resets, so it composes with the thread instead of fighting it.
 // ---------------------------------------------------------------------------
 function patchOf(result: unknown): string | undefined {
   if (result && typeof result === 'object') {
@@ -378,7 +356,7 @@ function pathOf(args: unknown): string | undefined {
   return undefined;
 }
 
-function patchStats(patch: string): { added: number; removed: number } {
+function patchStats(patch: string): { added: number; removed: number; lines: number } {
   let added = 0;
   let removed = 0;
   for (const line of patch.split('\n')) {
@@ -386,7 +364,36 @@ function patchStats(patch: string): { added: number; removed: number } {
     if (line.startsWith('+')) added++;
     else if (line.startsWith('-')) removed++;
   }
-  return { added, removed };
+  return { added, removed, lines: patch.split('\n').length };
+}
+
+/**
+ * Pull the file names out of a unified patch. The patch itself is handed to
+ * @git-diff-view as a single `hunks` entry: each entry there is parsed as a
+ * COMPLETE unified diff (header included), so passing only the `@@` body
+ * yields an empty diff.
+ */
+function parsePatch(patch: string): { oldName?: string; newName?: string } {
+  let oldName: string | undefined;
+  let newName: string | undefined;
+  for (const l of patch.split('\n')) {
+    if (l.startsWith('--- ')) oldName = l.slice(4).trim();
+    else if (l.startsWith('+++ ')) newName = l.slice(4).trim();
+    else if (l.startsWith('@@')) break;
+  }
+  return { oldName, newName };
+}
+
+const LANG_BY_EXT: Record<string, string> = {
+  ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', json: 'json',
+  md: 'markdown', css: 'css', html: 'xml', py: 'python', rs: 'rust', go: 'go',
+  java: 'java', rb: 'ruby', sh: 'bash', bash: 'bash', yml: 'yaml', yaml: 'yaml',
+  toml: 'ini', sql: 'sql', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
+};
+
+function langOf(file?: string): string {
+  const ext = file?.split('.').pop()?.toLowerCase();
+  return (ext && LANG_BY_EXT[ext]) || 'plaintext';
 }
 
 const segButton = (active: boolean): React.CSSProperties => ({
@@ -407,64 +414,66 @@ const EditCard = ({ args, result, isError, status }: ToolCallMessagePartProps) =
   const stats = patch ? patchStats(patch) : undefined;
   // Long diffs start collapsed so they don't flood the thread; short ones are
   // the point of the card, so they open. Always toggleable.
-  const lines = patch ? patch.split('\n').length : 0;
-  const [expanded, setExpanded] = React.useState(lines <= 40);
+  const [expanded, setExpanded] = React.useState((stats?.lines ?? 0) <= 40);
   const [sideBySide, setSideBySide] = React.useState(false);
 
-  const diffMarkup = React.useMemo(() => {
-    if (!patch) return '';
-    try {
-      return renderDiff(patch, {
-        outputFormat: sideBySide ? 'side-by-side' : 'line-by-line',
-        drawFileList: false,
-        matching: 'lines',
-        renderNothingWhenEmpty: false,
-      });
-    } catch {
-      return '';
-    }
-  }, [patch, sideBySide]);
+  const parsed = React.useMemo(() => (patch ? parsePatch(patch) : undefined), [patch]);
+
+  const data = React.useMemo(() => {
+    if (!parsed || !patch) return undefined;
+    const name = parsed.newName ?? parsed.oldName;
+    return {
+      oldFile: { fileName: parsed.oldName, fileLang: langOf(parsed.oldName) },
+      newFile: { fileName: parsed.newName ?? name, fileLang: langOf(parsed.newName ?? name) },
+      hunks: [patch],
+    };
+  }, [parsed]);
 
   const dot = isError ? '#f87171' : running ? '#eab308' : '#4ade80';
 
   return (
-    <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12 }}>
+    <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden', minWidth: 0, maxWidth: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12, minWidth: 0 }}>
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
           title={expanded ? 'Collapse' : 'Expand'}
-          style={{ background: 'none', border: 0, color: '#8b8b94', cursor: 'pointer', font: 'inherit', padding: 0, width: 10 }}
+          style={{ background: 'none', border: 0, color: '#8b8b94', cursor: 'pointer', font: 'inherit', padding: 0, width: 10, flexShrink: 0 }}
         >
           {expanded ? '▾' : '▸'}
         </button>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
-        <span style={{ color: '#e4e4e7' }}>edit</span>
-        <span style={{ color: '#8b8b94', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file}</span>
+        <span style={{ color: '#e4e4e7', flexShrink: 0 }}>edit</span>
+        <span style={{ color: '#8b8b94', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{file}</span>
         {stats && (
           <span style={{ flexShrink: 0 }}>
             <span style={{ color: '#4ade80' }}>+{stats.added}</span>{' '}
             <span style={{ color: '#f87171' }}>−{stats.removed}</span>
           </span>
         )}
-        {running && <span style={{ color: '#8b8b94' }}>running…</span>}
-        {patch && expanded && (
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 3 }}>
+        {running && <span style={{ color: '#8b8b94', flexShrink: 0 }}>running…</span>}
+        {data && expanded && (
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 3, flexShrink: 0 }}>
             <button type="button" style={segButton(!sideBySide)} onClick={() => setSideBySide(false)}>unified</button>
             <button type="button" style={segButton(sideBySide)} onClick={() => setSideBySide(true)}>split</button>
           </span>
         )}
       </div>
-      {expanded && diffMarkup && (
-        // No inner max-height/overflow: the thread is the single scroll surface,
-        // so nothing is trapped in a nested scroller.
-        <div
-          className="d2h-dark-color-scheme canvas-diff"
-          style={{ borderTop: '1px solid #2a2a30' }}
-          dangerouslySetInnerHTML={{ __html: diffMarkup }}
-        />
+      {expanded && data && (
+        // One scroll surface: the diff flows in the thread, never in a nested
+        // scroller, and `minWidth: 0` keeps it from widening the thread.
+        <div style={{ borderTop: '1px solid #2a2a30', minWidth: 0, overflow: 'hidden' }}>
+          <DiffView
+            data={data}
+            diffViewMode={sideBySide ? DiffModeEnum.Split : DiffModeEnum.Unified}
+            diffViewTheme="dark"
+            diffViewHighlight
+            diffViewFontSize={11.5}
+            diffViewWrap={!sideBySide}
+          />
+        </div>
       )}
-      {expanded && !diffMarkup && (result !== undefined || isError) && (
+      {expanded && !data && (result !== undefined || isError) && (
         <div style={{ padding: '0 10px 8px' }}>
           <ResultBody result={result} />
         </div>
@@ -478,11 +487,14 @@ const EditCard = ({ args, result, isError, status }: ToolCallMessagePartProps) =
 // ---------------------------------------------------------------------------
 const styles: Record<string, React.CSSProperties> = {
   root: { display: 'flex', flexDirection: 'column', height: '100vh', color: '#d4d4d8' },
-  viewport: { flex: 1, overflowY: 'auto', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 12 },
+  viewport: { flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 12 },
   empty: { margin: 'auto', textAlign: 'center', color: '#71717a', fontSize: 13 },
-  message: { maxWidth: 720, padding: '10px 14px', borderRadius: 10, lineHeight: 1.5 },
+  // maxWidth uses min(): a fixed px cap alone overflows narrow windows.
+  message: { maxWidth: 'min(720px, 100%)', minWidth: 0, padding: '10px 14px', borderRadius: 10, lineHeight: 1.5 },
   user: { alignSelf: 'flex-end', background: '#27272a', color: '#fafafa', whiteSpace: 'pre-wrap' },
-  assistant: { alignSelf: 'flex-start', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal', maxWidth: 900 },
+  // Overrides the base message cap: the assistant column spans the thread so
+  // diffs (especially split view) get the full width; prose is capped in .canvas-md.
+  assistant: { alignSelf: 'stretch', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal', minWidth: 0, maxWidth: '100%' },
   composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a' },
 };
 
@@ -554,7 +566,7 @@ const container = document.getElementById('root');
 if (container) {
   // Markdown styles live in a <style> tag — cheaper than per-node inline styles.
   const styleTag = document.createElement('style');
-  styleTag.textContent = uiCss + markdownCss + diffCss;
+  styleTag.textContent = uiCss + markdownCss + diffusionCss;
   document.head.append(styleTag);
   createRoot(container).render(<App />);
 }

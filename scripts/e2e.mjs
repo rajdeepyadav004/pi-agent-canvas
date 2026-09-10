@@ -96,7 +96,38 @@ try {
     html = await frame.locator('#root').innerHTML();
     console.log('ROOT HTML >>>\n' + html.slice(0, 3000));
   } catch (e) { console.log('html dump failed', String(e)); }
-  result.diffSeen = /d2h-file-wrapper|d2h-code-line|d2h-del|d2h-ins/.test(html);
+  result.diffSeen = /diff-line-num|diff-line-syntax-raw|diff-tailwindcss-wrapper/.test(html);
+  result.diffDump = await frame.evaluate(() => {
+    const root = document.querySelector('.diff-tailwindcss-wrapper');
+    if (!root) return 'no wrapper';
+    return {
+      html: root.innerHTML.slice(0, 1200),
+      rect: JSON.stringify(root.getBoundingClientRect()),
+      childCount: root.querySelectorAll('*').length,
+    };
+  });
+  result.diffSplitRendered = await frame.evaluate(() => {
+    const root = document.querySelector('.diff-tailwindcss-wrapper');
+    if (!root) return null;
+    const tables = root.querySelectorAll('table');
+    return { tables: tables.length, classes: root.className.slice(0, 80) };
+  });
+  result.horizontalOverflow = await frame.evaluate(() => {
+    const vp = document.querySelector('#root > div > div');
+    if (!vp) return null;
+    if (vp.scrollWidth <= vp.clientWidth + 1) return false;
+    const limit = vp.clientWidth;
+    const offenders = [];
+    for (const el of vp.querySelectorAll('*')) {
+      const r = el.getBoundingClientRect();
+      if (r.right > vp.getBoundingClientRect().right + 2) {
+        offenders.push(`${el.tagName}.${el.className || '-'} w=${Math.round(r.width)} right=${Math.round(r.right)} :: ${(el.textContent || '').slice(0, 60).replace(/\s+/g, ' ')}`);
+      }
+    }
+    console.log('OVERFLOW vp=' + limit);
+    console.log(offenders.slice(0, 8).join('\n'));
+    return true;
+  });
   result.splitToggleSeen = /unified/.test(html) && /split/.test(html);
 } catch (err) {
   result.error = String(err);
