@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { PiBridge, type PiEvent } from './piBridge';
+import { PiBridgeHolder } from './extension';
 
 /**
  * Owns the single canvas WebviewPanel (one instance, reused when the command
@@ -39,6 +41,7 @@ export class CanvasPanel {
     const instance = new CanvasPanel(panel, extensionUri);
     CanvasPanel.currentPanel = instance;
     await instance.setHtml();
+    instance.attachPiBridge();
 
     panel.onDidDispose(() => instance.dispose(), undefined, instance.disposables);
     panel.webview.onDidReceiveMessage(
@@ -80,9 +83,14 @@ export class CanvasPanel {
       .replace('__NONCE__', nonce);
   }
 
+  private attachPiBridge(): void {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? this.extensionUri.fsPath;
+    const bridge = PiBridgeHolder.get(this.extensionUri.fsPath);
+    bridge.onEvent((event: PiEvent) => this.post({ type: 'pi-event', event }));
+  }
+
   /**
-   * Extension host ⇄ webview bridge. Messages come from media/index.js.
-   * This switch grows as the real canvas features land.
+   * Extension host ⇄ webview bridge. Messages come from the webview app.
    */
   private async handleMessage(msg: unknown): Promise<void> {
     try {
@@ -100,6 +108,15 @@ export class CanvasPanel {
             chrome: readChromeSettings(),
           },
         });
+        break;
+      }
+      case 'pi-prompt': {
+        const text = String(message.message ?? '').trim();
+        if (text) PiBridgeHolder.get(this.extensionUri.fsPath).prompt(text);
+        break;
+      }
+      case 'pi-abort': {
+        PiBridgeHolder.get(this.extensionUri.fsPath).abort();
         break;
       }
       case 'webview-error': {

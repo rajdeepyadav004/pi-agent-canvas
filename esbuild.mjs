@@ -22,7 +22,7 @@ const extensionOptions = {
   platform: 'node',
   format: 'cjs',
   target: 'node18',
-  external: ['vscode'],
+  external: ['vscode', '@earendil-works/pi-coding-agent'],
   sourcemap: false,
   logLevel: 'info',
 };

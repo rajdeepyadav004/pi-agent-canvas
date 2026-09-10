@@ -1,8 +1,7 @@
 /**
- * pi-agent-canvas — webview UI (Cycle 2 starts here).
- * assistant-ui on top of the canvas surface: a thread view driven by a
- * ChatModelAdapter. The echo adapter is a placeholder; the real pi bridge
- * will replace `EchoAdapter.run` with the extension-host transport.
+ * pi-agent-canvas — webview UI (Cycle 2).
+ * assistant-ui thread backed by the real pi bridge: messages flow
+ * webview → extension host → `pi --mode json` → streamed events back.
  */
 import React from 'react';
 import { createRoot } from 'react-dom/client';
@@ -17,29 +16,87 @@ import {
 } from '@assistant-ui/react';
 
 // ---------------------------------------------------------------------------
-// pi bridge (placeholder): streams an echo reply. Replace with postMessage
-// round-trips to the extension host, which forwards to pi.
+// pi bridge (webview side): postMessage → extension host → `pi --mode json`.
+// The host relays every pi event as {type:'pi-event', event}; the adapter
+// accumulates text deltas and streams them as the assistant message.
 // ---------------------------------------------------------------------------
-const extractText = (msg: ThreadMessage | undefined): string =>
-  (msg?.content ?? [])
+type PiEvent = { type?: string; [k: string]: unknown };
+
+const piEventListeners = new Set<(event: PiEvent) => void>();
+window.addEventListener('message', (e) => {
+  const msg = e.data as { type?: string; event?: PiEvent };
+  if (msg?.type === 'pi-event' && msg.event) {
+    for (const l of piEventListeners) l(msg.event);
+  }
+});
+
+function textOf(msg: ThreadMessage): string {
+  return (msg.content ?? [])
     .filter((p): p is Extract<ThreadMessage['content'][number], { type: 'text' }> => p.type === 'text')
     .map((p) => p.text)
     .join(' ');
+}
 
-const EchoAdapter: ChatModelAdapter = {
+function extractLastUserText(messages: readonly ThreadMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'user') return textOf(m);
+  }
+  return '';
+}
+
+const PiAdapter: ChatModelAdapter = {
   async *run({ messages, abortSignal }) {
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-    const prompt = extractText(lastUser);
-    const reply = `pi dev canvas (assistant-ui scaffold) — echo: ${prompt || '(empty)'}`;
+    const vscode = vsapi();
+    const prompt = extractLastUserText(messages);
 
-    let sent = '';
-    for (let i = 0; i < reply.length; i += 6) {
-      if (abortSignal.aborted) return;
-      sent = reply.slice(0, i + 6);
-      yield { content: [{ type: 'text', text: sent }] };
-      await new Promise((r) => setTimeout(r, 15));
+    let text = '';
+    let settled = false;
+    let error: string | undefined;
+    const waiters: (() => void)[] = [];
+    const notify = () => waiters.splice(0).forEach((w) => w());
+
+    const listener = (event: PiEvent) => {
+      switch (event.type) {
+        case 'message_update': {
+          const delta = (event.assistantMessageEvent as { type?: string; delta?: string } | undefined);
+          if (delta?.type === 'text_delta' && typeof delta.delta === 'string') {
+            text += delta.delta;
+            notify();
+          }
+          break;
+        }
+        case 'pi_settled':
+        case 'agent_end':
+          settled = true;
+          notify();
+          break;
+        case 'pi_error':
+          error = String(event.error ?? 'pi bridge error');
+          settled = true;
+          notify();
+          break;
+      }
+    };
+    piEventListeners.add(listener);
+
+    const onAbort = () => vscode.postMessage({ type: 'pi-abort' });
+    abortSignal.addEventListener('abort', onAbort);
+
+    try {
+      vscode.postMessage({ type: 'pi-prompt', message: prompt });
+
+      while (!settled) {
+        await new Promise<void>((resolve) => waiters.push(resolve));
+        if (abortSignal.aborted) return;
+        if (error) throw new Error(error);
+        yield { content: [{ type: 'text', text }] };
+      }
+      yield { content: [{ type: 'text', text }], status: { type: 'complete', reason: 'stop' } };
+    } finally {
+      piEventListeners.delete(listener);
+      abortSignal.removeEventListener('abort', onAbort);
     }
-    yield { content: [{ type: 'text', text: reply }], status: { type: 'complete', reason: 'stop' } };
   },
 };
 
@@ -104,12 +161,26 @@ const AssistantMessage = () => (
 // Bootstrap
 // ---------------------------------------------------------------------------
 function App() {
-  const runtime = useLocalRuntime(EchoAdapter);
+  const runtime = useLocalRuntime(PiAdapter);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <CanvasThread />
     </AssistantRuntimeProvider>
   );
+}
+
+// Acquire the VS Code API exactly once (a second acquire throws).
+// Outside VS Code (plain browser) this stays null.
+let vsapiHandle: { postMessage(msg: unknown): void } | null = null;
+function vsapi() {
+  if (!vsapiHandle) {
+    try {
+      vsapiHandle = acquireVsCodeApi();
+    } catch {
+      vsapiHandle = { postMessage: () => {} };
+    }
+  }
+  return vsapiHandle;
 }
 
 const container = document.getElementById('root');
@@ -118,8 +189,8 @@ if (container) {
 }
 
 // Keep the host bridge alive + surface webview crashes in the launch log.
-try {
-  const vscode = acquireVsCodeApi();
+{
+  const vscode = vsapi();
   vscode.postMessage({ type: 'ready' });
   window.addEventListener('error', (e) =>
     vscode.postMessage({ type: 'webview-error', payload: String(e.error ?? e.message) }),
@@ -127,6 +198,4 @@ try {
   window.addEventListener('unhandledrejection', (e) =>
     vscode.postMessage({ type: 'webview-error', payload: String(e.reason) }),
   );
-} catch {
-  /* running outside VS Code (e.g. plain browser) — fine */
 }

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { CanvasPanel } from './canvasPanel';
+import { PiBridge, bridgeLog } from './piBridge';
 
 /**
  * pi-agent-canvas.
@@ -35,6 +36,9 @@ async function disableAiFeatures(): Promise<void> {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   void disableAiFeatures();
+
+  // One pi session per canvas window (in-process; re-created per activation).
+  PiBridgeHolder.sessionId = context.extensionUri.fsPath;
 
   context.subscriptions.push(
     vscode.commands.registerCommand('piAgentCanvas.open', () => {
@@ -99,5 +103,18 @@ async function closeChatSurfaces(): Promise<void> {
 }
 
 export function deactivate(): void {
-  /* no-op */
+  PiBridgeHolder.bridge?.dispose();
+}
+
+/** Lazily created, disposed with the extension. */
+export class PiBridgeHolder {
+  static bridge: PiBridge | undefined;
+  static sessionId = '';
+
+  static get(workspaceRoot: string): PiBridge {
+    if (!PiBridgeHolder.bridge) {
+      PiBridgeHolder.bridge = new PiBridge(workspaceRoot, bridgeLog);
+    }
+    return PiBridgeHolder.bridge;
+  }
 }
