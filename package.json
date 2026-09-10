@@ -22,6 +22,23 @@
         "command": "piAgentCanvas.open",
         "title": "Open Canvas Window",
         "category": "pi-agent-canvas"
+      },
+      {
+        "command": "piAgentCanvas.newSession",
+        "title": "New Session",
+        "category": "pi-agent-canvas",
+        "icon": "$(add)"
+      },
+      {
+        "command": "piAgentCanvas.openSession",
+        "title": "Open Session",
+        "category": "pi-agent-canvas"
+      },
+      {
+        "command": "piAgentCanvas.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "pi-agent-canvas",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [
@@ -31,7 +48,45 @@
         "mac": "cmd+alt+c",
         "when": "!webviewEditorVisible || activeWebviewPanelId != 'piAgentCanvas.canvas'"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "piAgentCanvas",
+          "title": "Pi Agent",
+          "icon": "media/robot.svg"
+        }
+      ]
+    },
+    "views": {
+      "piAgentCanvas": [
+        {
+          "id": "piAgentCanvas.sessions",
+          "name": "Sessions",
+          "contextualTitle": "Pi Agent"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "piAgentCanvas.sessions",
+        "contents": "No sessions yet for this workspace.\n[New Session](command:piAgentCanvas.newSession)\nTip: focus this list and press Ctrl+F to filter."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "piAgentCanvas.newSession",
+          "when": "view == piAgentCanvas.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "piAgentCanvas.refreshSessions",
+          "when": "view == piAgentCanvas.sessions",
+          "group": "navigation@2"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",

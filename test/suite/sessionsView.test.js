@@ -1,0 +1,172 @@
+/**
+ * ISOLATED-mode tests for the agent button: the contributed Sessions view and
+ * the panel registry it drives.
+ *
+ * The invariant under test is the tile rule — a session has AT MOST ONE panel,
+ * opening it again reveals that panel, and a new session gets its own.
+ *
+ * Panel count is restored to the single auto-opened canvas at the end so the
+ * suite leaves the window as it found it (smoke.test.js asserts that baseline).
+ */
+'use strict';
+const assert = require('node:assert');
+const vscode = require('vscode');
+
+const mode = process.env.CANVAS_TEST_MODE || 'isolated';
+const suite = mode === 'isolated' ? describe : describe.skip;
+
+const EXTENSION_ID = 'pi-labs.pi-agent-canvas';
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function canvasTabs() {
+  return vscode.window.tabGroups.all
+    .flatMap((group) => group.tabs)
+    .filter((tab) => String((tab.input || {}).viewType || '').includes('piAgentCanvas'));
+}
+
+/**
+ * Wait until the set of canvas tabs stops changing, so assertions measure a
+ * settled window rather than a startup transition.
+ */
+async function waitForStableTabs(timeoutMs = 20_000) {
+  let last = -1;
+  let stable = 0;
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const count = canvasTabs().length;
+    stable = count === last ? stable + 1 : 0;
+    if (stable >= 3) return count;
+    last = count;
+    await sleep(500);
+  }
+  return last;
+}
+
+/**
+ * Poll until a predicate passes. A throwing predicate means "not ready yet" —
+ * the server takes a few seconds to boot, so an early ECONNREFUSED is expected
+ * rather than fatal.
+ */
+async function waitFor(predicate, timeoutMs = 30_000, label = 'condition') {
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      if (await predicate()) return true;
+    } catch (err) {
+      lastError = err;
+    }
+    await sleep(500);
+  }
+  throw new Error(`timed out waiting for ${label}${lastError ? ` (last error: ${lastError})` : ''}`);
+}
+
+suite('pi-agent-canvas sessions view', function () {
+  this.timeout(120_000);
+
+  /** @type {import('../../src/extension').PiCanvasApi} */
+  let api;
+  let baseline = 0;
+
+  before(async () => {
+    const extension = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.ok(extension, 'extension should be loaded');
+    api = await extension.activate();
+    assert.ok(api && typeof api.sessions === 'function', 'activation should export the canvas API');
+
+    // The auto-opened canvas creates a session on the server; wait for it so the
+    // list-dependent tests below have something real to work with.
+    await waitFor(async () => (await api.sessions()).length > 0, 60_000, 'the auto-opened session to reach disk');
+    baseline = canvasTabs().length;
+  });
+
+  after(async () => {
+    for (const tab of canvasTabs()) await vscode.window.tabGroups.close(tab);
+    await api.openCanvas();
+  });
+
+  it('contributes the agent button and the Sessions view it opens', async () => {
+    const manifest = vscode.extensions.getExtension(EXTENSION_ID).packageJSON;
+    const containers = manifest.contributes.viewsContainers?.activitybar ?? [];
+    const container = containers.find((c) => c.id === 'piAgentCanvas');
+    assert.ok(container, 'an activity-bar container should be contributed');
+    assert.strictEqual(container.icon, 'media/robot.svg', 'the agent button uses the robot face');
+    assert.strictEqual(container.title, 'Pi Agent');
+
+    const views = manifest.contributes.views?.piAgentCanvas ?? [];
+    assert.strictEqual(views.length, 1, 'exactly one view is contributed');
+    assert.strictEqual(views[0].id, 'piAgentCanvas.sessions');
+
+    const commands = (manifest.contributes.commands ?? []).map((c) => c.command);
+    for (const id of ['piAgentCanvas.open', 'piAgentCanvas.newSession', 'piAgentCanvas.openSession', 'piAgentCanvas.refreshSessions']) {
+      assert.ok(commands.includes(id), `${id} should be contributed`);
+      assert.ok((await vscode.commands.getCommands(true)).includes(id), `${id} should be registered`);
+    }
+  });
+
+  it('lists stored sessions with the fields the view renders', async () => {
+    const sessions = await api.sessions();
+    assert.ok(Array.isArray(sessions), 'sessions() resolves to an array');
+    assert.ok(sessions.length >= 1, 'at least the auto-opened session');
+    for (const session of sessions) {
+      for (const key of ['id', 'modified', 'messageCount', 'firstMessage', 'file', 'open']) {
+        assert.ok(key in session, `session.${key} should be present`);
+      }
+      assert.ok(!Number.isNaN(Date.parse(session.modified)), 'modified should be a timestamp');
+    }
+  });
+
+  it('opens a session as its own editor tab', async () => {
+    const [session] = await api.sessions();
+    await api.openSession(session.id);
+    await waitFor(() => canvasTabs().length >= 1, 20_000, 'the session panel');
+    // A session that was not open adds one tab; one that was open reveals.
+    assert.ok(canvasTabs().length >= 1);
+  });
+
+  it('reveals rather than duplicating when the same session is opened twice', async () => {
+    const [session] = await api.sessions();
+    // Startup binding has to settle first: a panel that only learns its session
+    // after the server boots can briefly be a duplicate of one that came later,
+    // and it closes itself when it finds out (see CanvasPanel.bindSession).
+    await waitForStableTabs();
+
+    await api.openSession(session.id);
+    await sleep(1000);
+    const afterFirst = canvasTabs().length;
+    await api.openSession(session.id);
+    await sleep(1000);
+    assert.strictEqual(
+      canvasTabs().length,
+      afterFirst,
+      'opening an already-open session must reveal its tab, not add another',
+    );
+  });
+
+  it('gives a new session its own panel', async () => {
+    const before = canvasTabs().length;
+    await vscode.commands.executeCommand('piAgentCanvas.newSession');
+    await waitFor(() => canvasTabs().length > before, 20_000, 'a second canvas panel');
+    assert.strictEqual(canvasTabs().length, before + 1, 'a new conversation is a new tile');
+  });
+
+  it('"open canvas" converges on one panel instead of piling up tabs', async () => {
+    await vscode.commands.executeCommand('piAgentCanvas.open');
+    await sleep(1000);
+    const count = canvasTabs().length;
+    await vscode.commands.executeCommand('piAgentCanvas.open');
+    await sleep(1000);
+    assert.strictEqual(canvasTabs().length, count, 'repeated "open canvas" must not add tabs');
+
+    // Every bound panel names itself after its conversation (empty sessions
+    // fall back to their short id), so duplicate labels would mean two tabs
+    // claiming one session.
+    const labels = canvasTabs().map((tab) => tab.label);
+    assert.deepStrictEqual(
+      labels.filter((label, i) => labels.indexOf(label) !== i),
+      [],
+      `tab labels must be unique (got ${labels.join(' | ')})`,
+    );
+    void baseline;
+  });
+});

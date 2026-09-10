@@ -1,0 +1,22 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Pi Agent activity-bar icon: a friendly robot face.
+
+    Line art only (no filled cut-outs) because VS Code uses this file as a CSS
+    mask — it takes the alpha channel and tints it with the theme, so anything
+    drawn here becomes a single flat colour and "holes" must be genuinely
+    transparent.
+  -->
+  <g stroke="#C5C5C5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- antenna -->
+    <path d="M12 3.6V5.9" />
+    <!-- head -->
+    <rect x="4.1" y="5.9" width="15.8" height="12.4" rx="3.6" />
+    <!-- smile -->
+    <path d="M9.5 14.9c.75.66 1.6 1 2.5 1s1.75-.34 2.5-1" />
+  </g>
+  <!-- eyes and antenna tip are solid: they read as the "face" -->
+  <circle cx="12" cy="2.6" r="1.45" fill="#C5C5C5" />
+  <circle cx="9.2" cy="11" r="1.55" fill="#C5C5C5" />
+  <circle cx="14.8" cy="11" r="1.55" fill="#C5C5C5" />
+</svg>

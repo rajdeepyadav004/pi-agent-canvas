@@ -18,9 +18,14 @@
 </head>
 <body>
   <div id="root"></div>
-  <!-- The server endpoint is per-window (see canvasPanel.ts), so the bundle
-       reads it instead of hardcoding a port. -->
-  <script nonce="__NONCE__">window.__PI_CANVAS_WS__ = '__WS_URL__';</script>
+  <!-- Server endpoint and session are per-panel (see canvasPanel.ts), so the
+       bundle reads them instead of hardcoding a port or a conversation. -->
+  <script nonce="__NONCE__">
+    window.__PI_CANVAS_WS__ = __WS_URL__;
+    // Empty session id = fall back to __PI_CANVAS_MODE__ ('new' | 'continue').
+    window.__PI_CANVAS_SESSION__ = __SESSION_ID__;
+    window.__PI_CANVAS_MODE__ = __SESSION_MODE__;
+  </script>
   <script src="__SCRIPT_URI__" nonce="__NONCE__"></script>
 </body>
 </html>

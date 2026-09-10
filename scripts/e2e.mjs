@@ -200,8 +200,34 @@ try {
       await window.waitForTimeout(3000);
       result.fileTabTitles = await window.locator('.tabs-container .tab').allInnerTexts();
       result.fileTabOpened = result.fileTabTitles.some((t) => t.includes(name));
+
+      // The pane policy is "focus if visible, else preview in the active pane":
+      // clicking the same file again must reuse its tab, never split or stack.
+      const before = (await window.locator('.tabs-container .tab').count());
+      const groupsBefore = await window.locator('.editor-group-container').count();
+      await chip.click({ force: true });
+      await window.waitForTimeout(2500);
+      const after = (await window.locator('.tabs-container .tab').count());
+      const groupsAfter = await window.locator('.editor-group-container').count();
+      result.fileTabReused = after === before && groupsAfter === groupsBefore;
+      result.filePaneCount = [groupsBefore, groupsAfter];
     } catch (err) {
       result.fileChipError = String(err).slice(0, 200);
+    }
+  }
+  // The agent button + Sessions view: the activity-bar container, the tree it
+  // opens, and the session tiles inside it.
+  if (process.env.E2E_VIEW) {
+    const container = window.locator('.activitybar .action-item', { hasText: '' }).filter({ has: window.locator('[aria-label*="Pi Agent"]') });
+    result.activityButtonSeen = (await window.locator('.activitybar [aria-label*="Pi Agent"]').count()) > 0;
+    if (result.activityButtonSeen) {
+      await window.locator('.activitybar [aria-label*="Pi Agent"]').first().click({ force: true });
+      await window.waitForTimeout(3500);
+      result.sidebarRows = await window.locator('.pane-body .monaco-list-row').allInnerTexts().catch(() => []);
+      result.sidebarTitleSeen = (await window.locator('.pane-header', { hasText: 'Sessions' }).count()) > 0;
+      // The title-bar "new session" button is the second robot affordance.
+      result.newSessionButtonSeen = (await window.locator('.pane-header a.action-label[aria-label*="New Session"]').count()) > 0;
+      void container;
     }
   }
   if (process.env.E2E_SHOT) {

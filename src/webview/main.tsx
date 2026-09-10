@@ -50,9 +50,18 @@ type PiEvent = {
   history?: WireMessage[];
 };
 
-// Injected by the extension (media/index.html) — one server per window.
-declare global { interface Window { __PI_CANVAS_WS__?: string } }
+// Injected by the extension (media/index.html) — one server per window, one
+// conversation per panel. An empty session means this panel owns a new one.
+declare global {
+  interface Window {
+    __PI_CANVAS_WS__?: string;
+    __PI_CANVAS_SESSION__?: string;
+    __PI_CANVAS_MODE__?: 'new' | 'continue';
+  }
+}
 const WS_URL = window.__PI_CANVAS_WS__ ?? 'ws://127.0.0.1:47811';
+const SESSION_ID = window.__PI_CANVAS_SESSION__ || undefined;
+const SESSION_MODE = window.__PI_CANVAS_MODE__ ?? 'continue';
 const piEventListeners = new Set<(event: PiEvent) => void>();
 
 let socket: WebSocket | null = null;
@@ -67,14 +76,24 @@ let activeSessionId: string | undefined;
 function connect() {
   socket = new WebSocket(WS_URL);
   socket.onopen = () => {
-    // 'continue' = pick up where this workspace left off. Tabs (next step)
-    // will ask for a specific sessionId, or for a brand new session.
-    sendToPi({ type: 'open_session', mode: 'continue' });
+    // This panel either owns a session already, or asks the host's chosen mode:
+    // 'continue' resumes the workspace's most recent conversation (no new tab
+    // silently forks the thread), 'new' starts a fresh one.
+    sendToPi(
+      SESSION_ID
+        ? { type: 'open_session', sessionId: SESSION_ID }
+        : { type: 'open_session', mode: SESSION_MODE },
+    );
   };
   socket.onmessage = (ev) => {
     try {
       const event = JSON.parse(ev.data as string) as PiEvent;
-      if (event.type === 'session_opened') activeSessionId = event.sessionId;
+      if (event.type === 'session_opened') {
+        activeSessionId = event.sessionId;
+        // Let the host name the tab after this conversation and re-key its
+        // panel registry, so "open session" later reveals this tab.
+        vsapi().postMessage({ type: 'sessionOpened', sessionId: event.sessionId });
+      }
       for (const l of piEventListeners) l(event);
     } catch { /* ignore malformed lines */ }
   };

@@ -26,6 +26,10 @@
  * A session id is the pi session id, so a canvas tab and `pi --continue` can
  * refer to the same conversation.
  *
+ * HTTP (used by the extension's sidebar, and handy from a shell):
+ *   GET /           → liveness + currently open session ids
+ *   GET /sessions   → every stored session for this workspace
+ *
  * Run: node scripts/pi-server.mjs
  *   env: PI_CANVAS_PORT, PI_CANVAS_CWD, PI_CANVAS_SESSION_DIR
  */
@@ -131,13 +135,46 @@ function promptSession(entry, message) {
 
 const resolve = (sessionId) => (sessionId ? sessions.get(sessionId) : lastOpened);
 
+/** Every stored session for this workspace, plus whether it is live right now. */
+async function listSessions() {
+  const list = await SessionManager.list(CWD, SESSION_DIR);
+  return list.map((s) => ({
+    id: s.id,
+    name: s.name,
+    modified: s.modified,
+    messageCount: s.messageCount,
+    firstMessage: s.firstMessage,
+    cwd: s.cwd,
+    file: s.path,
+    open: sessions.has(s.id),
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
-const httpServer = createServer((_req, res) => {
+const sendJson = (res, status, body) => {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+};
+
+const httpServer = createServer((req, res) => {
+  const path = (req.url ?? '/').split('?')[0];
   // Liveness endpoint — also proves outbound-independent startup.
-  res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, server: 'pi-canvas-server', sessions: [...sessions.keys()] }));
+  if (path === '/') {
+    sendJson(res, 200, { ok: true, server: 'pi-canvas-server', sessions: [...sessions.keys()] });
+    return;
+  }
+  // The sidebar reads this: session listing is filesystem work the extension
+  // host can't cheaply do itself (the SDK is ESM-only and ~850ms to load).
+  if (path === '/sessions') {
+    listSessions().then(
+      (sessions) => sendJson(res, 200, { sessions }),
+      (err) => sendJson(res, 500, { error: String(err) }),
+    );
+    return;
+  }
+  sendJson(res, 404, { error: `no such endpoint: ${path}` });
 });
 
 const wss = new WebSocketServer({ server: httpServer });
@@ -176,19 +213,7 @@ async function handle(ws, data) {
     }
     case 'list_sessions': {
       try {
-        const list = await SessionManager.list(CWD, SESSION_DIR);
-        reply(ws, {
-          type: 'sessions',
-          sessions: list.map((s) => ({
-            id: s.id,
-            name: s.name,
-            modified: s.modified,
-            messageCount: s.messageCount,
-            firstMessage: s.firstMessage,
-            file: s.path,
-            open: sessions.has(s.id),
-          })),
-        });
+        reply(ws, { type: 'sessions', sessions: await listSessions() });
       } catch (err) {
         reply(ws, { type: 'server_error', error: String(err) });
       }
