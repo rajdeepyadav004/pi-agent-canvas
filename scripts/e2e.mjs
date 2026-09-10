@@ -10,7 +10,7 @@
 import { _electron } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -46,6 +46,14 @@ try {
   // Playwright drives a specific build: 1.137.0 dies on startup under Playwright
   // (chrome-sandbox), so prefer the build the harness is known to work with and
   // allow an explicit override.
+  // VS Code caches the extension set in extensions.json. With an installed
+  // .vsix that cache outlives the extracted directory, and the window then
+  // refuses to load anything ("Extensions have been modified on disk") — which
+  // looks exactly like a broken artifact.
+  if (installed) {
+    try { rmSync(`${extensionsDir}/extensions.json`, { force: true }); } catch { /* fine */ }
+  }
+
   const codeBin =
     process.env.E2E_CODE_BIN ??
     (existsSync(`${root}.vscode-test/vscode-linux-x64-1.136.1/code`)
