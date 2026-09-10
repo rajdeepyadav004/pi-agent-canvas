@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-09-10
+
+Fixes the reason "the agent isn't replying" gave you nothing to go on.
+
+### Added
+
+- **A "Pi Agent Canvas" output channel** carrying the agent server's own
+  stdout/stderr, webview crashes, the resolved pi SDK path, the working
+  directory, the port and `PATH`. The server used to run with output discarded,
+  so every server-side failure was invisible.
+- **A failure banner above the composer** with a plain-language cause and a
+  *show logs* link: missing pi credentials, an unreachable model provider, a
+  missing Node.js, a damaged install. It renders while a session is still
+  loading, so even a failure that early is visible.
+
+### Fixed
+
+- A spawn failure (common on macOS, where a Dock-launched VS Code cannot see
+  nvm or Homebrew paths, so `node` does not exist) was swallowed silently; it
+  now raises a notification with a *Show Log* action.
+- The credential error no longer points at documentation paths inside the
+  vendored SDK that we do not ship; it names the actual fix.
+- A session row whose session file is gone opened a panel that could never load
+  and sat on "Connecting to pi…" forever. It now warns and refreshes the list.
+- The agent server no longer dies if it writes to its output after the window
+  that piped it has gone away.
+
+[0.1.1]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.1.1
+
 ## [0.1.0] — 2026-09-10
 
 First packaged release.
