@@ -72,15 +72,32 @@ try {
     await window.waitForTimeout(settleMs);
     body = await frame.locator('body').innerText();
   }
+  if (process.env.E2E_CLICK_SPLIT) {
+    const split = frame.locator('button', { hasText: 'split' }).first();
+    await split.click({ timeout: 10_000 });
+    await window.waitForTimeout(1200);
+  }
+  if (process.env.E2E_SCROLL) {
+    await window.mouse.move(600, 500);
+    await window.mouse.wheel(0, Number(process.env.E2E_SCROLL));
+    await window.waitForTimeout(800);
+  }
+  if (process.env.E2E_SHOT) {
+    await window.screenshot({ path: process.env.E2E_SHOT });
+    console.log('screenshot saved', process.env.E2E_SHOT);
+  }
   const replies = [...body.matchAll(new RegExp(EXPECT, 'g'))].length;
   if (replies >= 2) result.replySeen = true; // user message + assistant reply
   result.toolCardSeen = /\bbash\b/.test(body);
   result.thinkingSeen = /Thinking|Thought/.test(body);
   console.log('THREAD TEXT >>>\n' + body.slice(0, 2000));
+  let html = '';
   try {
-    const html = await frame.locator('#root').innerHTML();
+    html = await frame.locator('#root').innerHTML();
     console.log('ROOT HTML >>>\n' + html.slice(0, 3000));
   } catch (e) { console.log('html dump failed', String(e)); }
+  result.diffSeen = /d2h-file-wrapper|d2h-code-line|d2h-del|d2h-ins/.test(html);
+  result.splitToggleSeen = /unified/.test(html) && /split/.test(html);
 } catch (err) {
   result.error = String(err);
 }

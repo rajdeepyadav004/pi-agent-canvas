@@ -21,6 +21,8 @@ import {
 } from '@assistant-ui/react';
 import { MarkdownTextPrimitive, type CodeHeaderProps } from '@assistant-ui/react-markdown';
 import remarkGfm from 'remark-gfm';
+import { html as renderDiff } from 'diff2html';
+import diff2htmlCss from 'diff2html/bundles/css/diff2html.min.css';
 
 // ---------------------------------------------------------------------------
 // pi transport: direct WebSocket to pi-canvas-server.
@@ -73,7 +75,7 @@ type ToolPart = {
   type: 'tool-call';
   toolCallId: string;
   toolName: string;
-  args: unknown;
+  args: Record<string, any>;
   argsText: string;
   result?: unknown;
   isError?: boolean;
@@ -132,7 +134,7 @@ const PiAdapter: ChatModelAdapter = {
             type: 'tool-call',
             toolCallId: String(event.toolCallId ?? ''),
             toolName: String(event.toolName ?? 'tool'),
-            args: event.args,
+            args: (event.args ?? {}) as Record<string, any>,
             argsText: '',
           });
           notify();
@@ -188,6 +190,44 @@ const PiAdapter: ChatModelAdapter = {
 // Part renderers
 // ---------------------------------------------------------------------------
 const Mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+
+// Composer chrome lives in CSS because ComposerPrimitive.Input's `style` prop
+// is typed for autosize height and rejects a plain CSSProperties object.
+const uiCss = `
+.canvas-input {
+  width: 100%; background: #18181b; border: 1px solid #3f3f46; border-radius: 8px;
+  color: #fafafa; padding: 8px 12px; font: inherit; resize: none; outline: none;
+}
+.canvas-input:focus { border-color: #52525b; }
+`;
+
+// diff2html ships its own stylesheet; we render its dark palette and hide the
+// file header it draws (the card supplies its own header).
+//
+// NB: diff2html positions its line numbers `position: absolute` but never sets
+// a positioned ancestor, so they would anchor to #root (position: fixed) and
+// stay glued to the viewport while the diff scrolls. Each line therefore gets
+// `position: relative` to anchor its own number.
+const diffCss = `
+${diff2htmlCss}
+.canvas-diff .d2h-file-header { display: none; }
+.canvas-diff .d2h-file-wrapper { border: 0; margin: 0; }
+.canvas-diff .d2h-file-diff { overflow: visible; }
+.canvas-diff .d2h-code-line,
+.canvas-diff .d2h-code-side-line,
+.canvas-diff .d2h-code-linenumber,
+.canvas-diff .d2h-code-side-linenumber { position: relative; }
+.canvas-diff .d2h-code-linenumber,
+.canvas-diff .d2h-code-side-linenumber { left: 0; }
+.canvas-diff .d2h-code-side-linenumber,
+.canvas-diff .d2h-code-linenumber { font-size: 10.5px; }
+.canvas-diff .d2h-code-line, .canvas-diff .d2h-code-side-line { font-family: ${Mono}; font-size: 11.5px; }
+.canvas-diff table.d2h-diff-table { font-size: 11.5px; table-layout: fixed; }
+.canvas-diff .d2h-del { background: #3a1d1d; }
+.canvas-diff .d2h-ins { background: #12301c; }
+.canvas-diff .d2h-info { background: #1b1b20; color: #8b8b94; }
+.canvas-diff .d2h-file-side-diff { vertical-align: top; }
+`;
 
 // Markdown styling for assistant text. Scoped to .canvas-md so it can't leak
 // into the tool cards / composer chrome.
@@ -277,7 +317,7 @@ function summarizeArgs(args: unknown): string {
   return typeof first === 'string' ? first : '';
 }
 
-function ResultBody(result: unknown): React.ReactElement | null {
+function ResultBody({ result }: { result: unknown }): React.ReactElement | null {
   if (result === undefined || result === null) return null;
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
   const clipped = text.length > 4000 ? `${text.slice(0, 4000)}\n… (${text.length - 4000} more chars)` : text;
@@ -317,6 +357,123 @@ const ToolCard = ({ toolName, args, result, isError, status }: ToolCallMessagePa
 };
 
 // ---------------------------------------------------------------------------
+// Edit card — pi's edit tool returns a unified patch in result.details.patch,
+// so the diff renders from the patch itself (line-by-line or side-by-side).
+// ---------------------------------------------------------------------------
+function patchOf(result: unknown): string | undefined {
+  if (result && typeof result === 'object') {
+    const details = (result as { details?: { patch?: unknown } }).details;
+    if (details && typeof details.patch === 'string') return details.patch;
+  }
+  return undefined;
+}
+
+function pathOf(args: unknown): string | undefined {
+  if (args && typeof args === 'object') {
+    const a = args as Record<string, unknown>;
+    for (const k of ['path', 'file_path', 'filePath']) {
+      if (typeof a[k] === 'string') return a[k] as string;
+    }
+  }
+  return undefined;
+}
+
+function patchStats(patch: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) added++;
+    else if (line.startsWith('-')) removed++;
+  }
+  return { added, removed };
+}
+
+const segButton = (active: boolean): React.CSSProperties => ({
+  background: active ? '#2f2f35' : 'none',
+  border: '1px solid ' + (active ? '#3f3f46' : 'transparent'),
+  borderRadius: 4,
+  color: active ? '#e4e4e7' : '#8b8b94',
+  cursor: 'pointer',
+  font: 'inherit',
+  fontSize: 11,
+  padding: '2px 7px',
+});
+
+const EditCard = ({ args, result, isError, status }: ToolCallMessagePartProps) => {
+  const running = status?.type === 'running';
+  const patch = patchOf(result);
+  const file = pathOf(args) ?? 'edit';
+  const stats = patch ? patchStats(patch) : undefined;
+  // Long diffs start collapsed so they don't flood the thread; short ones are
+  // the point of the card, so they open. Always toggleable.
+  const lines = patch ? patch.split('\n').length : 0;
+  const [expanded, setExpanded] = React.useState(lines <= 40);
+  const [sideBySide, setSideBySide] = React.useState(false);
+
+  const diffMarkup = React.useMemo(() => {
+    if (!patch) return '';
+    try {
+      return renderDiff(patch, {
+        outputFormat: sideBySide ? 'side-by-side' : 'line-by-line',
+        drawFileList: false,
+        matching: 'lines',
+        renderNothingWhenEmpty: false,
+      });
+    } catch {
+      return '';
+    }
+  }, [patch, sideBySide]);
+
+  const dot = isError ? '#f87171' : running ? '#eab308' : '#4ade80';
+
+  return (
+    <div style={{ margin: '6px 0', background: '#151518', border: '1px solid #2a2a30', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontFamily: Mono, fontSize: 12 }}>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          title={expanded ? 'Collapse' : 'Expand'}
+          style={{ background: 'none', border: 0, color: '#8b8b94', cursor: 'pointer', font: 'inherit', padding: 0, width: 10 }}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+        <span style={{ color: '#e4e4e7' }}>edit</span>
+        <span style={{ color: '#8b8b94', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file}</span>
+        {stats && (
+          <span style={{ flexShrink: 0 }}>
+            <span style={{ color: '#4ade80' }}>+{stats.added}</span>{' '}
+            <span style={{ color: '#f87171' }}>−{stats.removed}</span>
+          </span>
+        )}
+        {running && <span style={{ color: '#8b8b94' }}>running…</span>}
+        {patch && expanded && (
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 3 }}>
+            <button type="button" style={segButton(!sideBySide)} onClick={() => setSideBySide(false)}>unified</button>
+            <button type="button" style={segButton(sideBySide)} onClick={() => setSideBySide(true)}>split</button>
+          </span>
+        )}
+      </div>
+      {expanded && diffMarkup && (
+        // No inner max-height/overflow: the thread is the single scroll surface,
+        // so nothing is trapped in a nested scroller.
+        <div
+          className="d2h-dark-color-scheme canvas-diff"
+          style={{ borderTop: '1px solid #2a2a30' }}
+          dangerouslySetInnerHTML={{ __html: diffMarkup }}
+        />
+      )}
+      {expanded && !diffMarkup && (result !== undefined || isError) && (
+        <div style={{ padding: '0 10px 8px' }}>
+          <ResultBody result={result} />
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
 const styles: Record<string, React.CSSProperties> = {
@@ -325,18 +482,8 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#71717a', fontSize: 13 },
   message: { maxWidth: 720, padding: '10px 14px', borderRadius: 10, lineHeight: 1.5 },
   user: { alignSelf: 'flex-end', background: '#27272a', color: '#fafafa', whiteSpace: 'pre-wrap' },
-  assistant: { alignSelf: 'flex-start', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal' },
+  assistant: { alignSelf: 'flex-start', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal', maxWidth: 900 },
   composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a' },
-  input: {
-    width: '100%',
-    background: '#18181b',
-    border: '1px solid #3f3f46',
-    borderRadius: 8,
-    color: '#fafafa',
-    padding: '8px 12px',
-    font: 'inherit',
-    resize: 'none',
-  },
 };
 
 function CanvasThread() {
@@ -346,13 +493,11 @@ function CanvasThread() {
         <ThreadPrimitive.Empty>
           <div style={styles.empty}>pi dev canvas — ask, and watch it work.</div>
         </ThreadPrimitive.Empty>
-        <ThreadPrimitive.Messages<{ UserMessage: React.ComponentType; AssistantMessage: React.ComponentType }>
-          components={{ UserMessage, AssistantMessage }}
-        />
+        <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
       </ThreadPrimitive.Viewport>
       {/* ComposerPrimitive.Root renders the <form> — Enter submits via it. */}
       <ComposerPrimitive.Root style={styles.composer}>
-        <ComposerPrimitive.Input style={styles.input} rows={1} autoFocus />
+        <ComposerPrimitive.Input className="canvas-input" rows={1} autoFocus />
       </ComposerPrimitive.Root>
     </ThreadPrimitive.Root>
   );
@@ -370,10 +515,12 @@ const AssistantMessage = () => (
       components={{
         Text: TextPartView,
         Reasoning: ReasoningPartView,
-        tools: { Fallback: ToolCard },
+        tools: { by_name: { edit: EditCard }, Fallback: ToolCard },
       }}
     />
-    <MessagePrimitive.Error style={{ color: '#f87171', marginTop: 6 }} />
+    <div style={{ color: '#f87171', marginTop: 6 }}>
+      <MessagePrimitive.Error />
+    </div>
   </MessagePrimitive.Root>
 );
 
@@ -407,7 +554,7 @@ const container = document.getElementById('root');
 if (container) {
   // Markdown styles live in a <style> tag — cheaper than per-node inline styles.
   const styleTag = document.createElement('style');
-  styleTag.textContent = markdownCss;
+  styleTag.textContent = uiCss + markdownCss + diffCss;
   document.head.append(styleTag);
   createRoot(container).render(<App />);
 }

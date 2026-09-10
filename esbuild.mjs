@@ -35,6 +35,9 @@ const webviewOptions = {
   format: 'iife',
   target: 'es2022',
   jsx: 'automatic',
+  // Vendored CSS (diff2html) is imported as a string and injected into a
+  // <style> tag — the webview CSP allows inline styles, not extra files.
+  loader: { '.css': 'text' },
   sourcemap: false,
   logLevel: 'info',
 };
