@@ -282,6 +282,27 @@ try {
     result.bashCommandEchoed = seen.includes(process.env.E2E_BASH.replace(/^!+/, '').trim());
     if (process.env.E2E_SHOT) await window.screenshot({ path: process.env.E2E_SHOT });
   }
+  // Extension UI sub-protocol: an extension that asks the user a question has
+  // to reach the canvas and get an answer back. Without a UI context the turn
+  // simply sits there, which is why this is asserted, not assumed. Requires an
+  // extension in the agent dir that asks (see test/suite/protocol.test.js).
+  if (process.env.E2E_EXPECT_UI_DIALOG) {
+    const dialog = frame.locator('[role="dialog"]');
+    for (let i = 0; i < 40; i++) {
+      if ((await dialog.count()) > 0) break;
+      await window.waitForTimeout(500);
+    }
+    result.uiDialogSeen = (await dialog.count()) > 0;
+    if (result.uiDialogSeen) {
+      result.uiDialogText = (await dialog.first().innerText()).slice(0, 200);
+      await dialog.locator('button', { hasText: /^Confirm$/ }).first().click({ force: true });
+      // The extension reports the answer it received back through ctx.ui.notify.
+      for (let i = 0; i < 24; i++) {
+        await window.waitForTimeout(500);
+        if ((await frame.locator('text=/confirm => true/').count()) > 0) { result.uiNoticeSeen = true; break; }
+      }
+    }
+  }
   // Assert on the finished transcript (used to prove replayed history, e.g. a
   // `!command` card from an earlier run).
   if (process.env.E2E_EXPECT_TEXT) {
@@ -342,6 +363,28 @@ try {
     return true;
   });
   result.splitToggleSeen = /unified/.test(html) && /split/.test(html);
+  // Feature rendering: assert on the *rendered* UI, not the text. Markdown is
+  // converted to HTML (.canvas-md), a diff renders through @git-diff-view, and
+  // a bash card is a plain div — a text assertion alone would still pass if the
+  // renderer regressed to raw output, so check for the elements themselves.
+  // Separate several with `||`.
+  if (process.env.E2E_EXPECT_SELECTOR) {
+    const selectors = process.env.E2E_EXPECT_SELECTOR.split('||');
+    result.selectorSeen = {};
+    for (const selector of selectors) {
+      result.selectorSeen[selector] = await liveFrame.locator(selector).count().catch(() => 0);
+    }
+    result.selectorsAllSeen = Object.values(result.selectorSeen).every((n) => n > 0);
+  }
+  result.markdownSeen = {
+    table: await liveFrame.locator('.canvas-md table').count().catch(() => 0),
+    heading: await liveFrame.locator('.canvas-md h1, .canvas-md h2, .canvas-md h3').count().catch(() => 0),
+    codeBlock: await liveFrame.locator('.canvas-md pre code').count().catch(() => 0),
+    inlineCode: await liveFrame.locator('.canvas-md :not(pre) > code').count().catch(() => 0),
+    listItem: await liveFrame.locator('.canvas-md li').count().catch(() => 0),
+    copyButton: await liveFrame.locator('.canvas-md button').count().catch(() => 0),
+  };
+  result.fileChipButtons = await liveFrame.locator('button.canvas-file').count().catch(() => 0);
   clearInterval(toastSweeper);
 } catch (err) {
   result.error = String(err);

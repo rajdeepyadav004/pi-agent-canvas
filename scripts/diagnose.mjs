@@ -138,7 +138,8 @@ if (!opened) {
 say(`${stamp()} session ${opened.sessionId}`);
 
 ws.send(JSON.stringify({ type: 'prompt', sessionId: opened.sessionId, message: PROMPT }));
-const outcome = await waitFor(events, (e) => e.type === 'settled' || e.type === 'server_error', TIMEOUT_S);
+// `agent_settled` is pi's own end-of-turn event (scripts/pi-server.mjs).
+const outcome = await waitFor(events, (e) => e.type === 'agent_settled' || e.type === 'server_error', TIMEOUT_S);
 const text = events
   .filter((e) => e.type === 'message_update' && e.assistantMessageEvent?.type === 'text_delta')
   .map((e) => e.assistantMessageEvent.delta)

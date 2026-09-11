@@ -26,6 +26,14 @@ produced them.
   and a session that stays usable afterwards.
 - **Sessions persist.** Conversations are stored by pi itself, so a reload (or
   `pi --continue` in a terminal) picks up exactly where you left off.
+- **Shell when you want it.** Type `!command` to run it in the session's
+  context, or `!!command` to keep the output out of the agent's context.
+- **Extensions can ask you things.** A pi extension's `ctx.ui.confirm()` /
+  `select()` / `input()` opens a dialog in the canvas; `ctx.ui.notify()` becomes
+  a toast.
+
+Every capability we claim, where it lives, and the test that proves it: see
+[**docs/FEATURES.md**](https://github.com/rajdeepyadav004/pi-agent-canvas/blob/main/docs/FEATURES.md).
 
 ## Requirements
 

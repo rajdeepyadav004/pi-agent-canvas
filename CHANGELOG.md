@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The session host is built on pi's own bootstrap and speaks pi's own
+  protocol.** It now creates its runtime through `createAgentSessionServices`
+  and a session through `createAgentSessionFromServices` — the path pi's own
+  modes use — instead of hand-assembling a runtime.
+
+  This fixes a real, reported failure: the host called `ModelRuntime.create()`
+  with no options and passed the result in, which overrode pi's own
+  `auth.json` / `models.json` discovery. Custom providers (a LiteLLM proxy, an
+  Ollama server, anything in `models.json`) and stored credentials were
+  invisible, extension-declared providers were never registered, so a session
+  fell back to a built-in default model with no key and answered nothing —
+  indistinguishable from "the provider is down". The host now logs the
+  providers it can see and, per session, the model and its auth status, so this
+  class of failure names itself.
+
+- **Commands and events are pi's RPC vocabulary** (`docs/rpc.md`), declared in
+  `src/shared/protocol.ts`: `prompt`, `abort`, `bash`, `new_session`,
+  `set_model`, `cycle_model`, `set_thinking_level`, `compact`, `steer`,
+  `follow_up`, `get_state`, `get_session_stats`, `set_session_name`,
+  `extension_ui_response` in; `agent_settled`, `message_update`,
+  `tool_execution_*`, `queue_update`, `compaction_*`, `agent_start/end` out.
+  Commands may carry an `id` and get a `response` envelope. `settled` was our
+  invention and is gone.
+
+- **The turn's end is pi's own `agent_settled` event**, not one we synthesise.
+  We only synthesise a settle when pi never got that far (a prompt that failed
+  to start), which is what keeps a failed turn from hanging the UI.
+
+### Added
+
+- **Extension UI sub-protocol.** pi extensions can ask the user questions:
+  `ctx.ui.confirm/select/input/editor` block until the canvas answers, and
+  `ctx.ui.notify` renders as a toast. Previously an extension that asked
+  anything waited forever with nothing on screen. Binding is deliberately not
+  awaited during session start, so a dialog raised at `session_start` cannot
+  hold back the session and deadlock against the connecting screen.
+
+- **`docs/FEATURES.md`** — the behaviour contract: every claimed feature, where
+  it lives, and the test that proves it.
+
+- **Protocol conformance tests** (`test/suite/protocol.test.js`, 9 checks) that
+  read the sources as text and fail when the host, the webview, the diagnostics
+  script and the declared contract drift apart. They already caught
+  `scripts/diagnose.mjs` waiting on the pre-rename `settled` event.
+
+### Fixed
+
+- A dialog raised before the canvas finished connecting is now answerable
+  (dialogs render outside the hydration branch).
+- A cancelled turn answers outstanding extension dialogs with `cancelled`.
+- Closing a session answers its open dialogs instead of leaving an extension
+  waiting.
+
 ## [0.2.1] — 2026-09-11
 
 ### Fixed

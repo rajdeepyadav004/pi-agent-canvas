@@ -28,12 +28,24 @@ import remarkGfm from 'remark-gfm';
 import { DiffView, DiffModeEnum } from '@git-diff-view/react';
 import diffusionCss from '@git-diff-view/react/styles/diff-view.css';
 import { explainError } from '../shared/explain';
+import {
+  PROTOCOL_VERSION,
+  type ExtensionUiRequest,
+  type ExtensionUiResponse,
+} from '../shared/protocol';
 
 // ---------------------------------------------------------------------------
 // pi transport: direct WebSocket to pi-canvas-server.
-//   out: {type:'prompt',message} | {type:'abort'}
-//   in:  SDK session events (agent_start, message_update {text_delta |
-//        thinking_delta}, tool_execution_start/update/end, …) + settled | error
+//
+// Commands and events use pi's own RPC vocabulary (see src/shared/protocol.ts
+// and pi's docs/rpc.md), so this adapter is a thin translation into
+// assistant-ui parts rather than a protocol of its own:
+//   out: {type:'prompt', message} | {type:'bash'} | {type:'abort'}
+//        | {type:'extension_ui_response'} | …
+//   in:  pi session events (agent_start, message_update {text_delta |
+//        thinking_delta}, tool_execution_start/update/end, agent_settled, …),
+//        plus host events (server_ready, session_opened, server_error) and the
+//        extension UI sub-protocol (extension_ui_request).
 // ---------------------------------------------------------------------------
 type PiEvent = {
   type?: string;
@@ -56,6 +68,20 @@ type PiEvent = {
   command?: string;
   excludeFromContext?: boolean;
   bashResult?: { output?: string; exitCode?: number; cancelled?: boolean; truncated?: boolean; fullOutputPath?: string };
+  // host lifecycle
+  protocol?: number;
+  success?: boolean;
+  // extension UI sub-protocol (see src/shared/protocol.ts)
+  method?: string;
+  title?: string;
+  options?: string[];
+  message?: string;
+  placeholder?: string;
+  prefill?: string;
+  timeout?: number;
+  notifyType?: 'info' | 'warning' | 'error';
+  statusKey?: string;
+  statusText?: string;
 };
 
 // Injected by the extension (media/index.html) — one server per window, one
@@ -119,6 +145,78 @@ function sendToPi(msg: unknown): boolean {
   if (socket?.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(msg));
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Extension UI sub-protocol (pi's rpc.md § Extension UI Protocol)
+//
+// Extensions ask the user things through `ctx.ui.confirm()` and friends. With
+// no UI context those calls have nowhere to go: the extension sits waiting and
+// the turn shows nothing, which is why this is a correctness path rather than
+// decoration. Dialog methods block the extension until we answer;
+// notification methods are advisory.
+// ---------------------------------------------------------------------------
+type UiNotice = { id: string; message: string; type?: 'info' | 'warning' | 'error' };
+type UiState = { dialogs: ExtensionUiRequest[]; notices: UiNotice[] };
+
+let uiState: UiState = { dialogs: [], notices: [] };
+const uiListeners = new Set<() => void>();
+const subscribeUi = (listener: () => void) => {
+  uiListeners.add(listener);
+  return () => { uiListeners.delete(listener); };
+};
+const getUiState = () => uiState;
+function setUiState(next: UiState): void {
+  uiState = next;
+  for (const listener of uiListeners) listener();
+}
+
+const NOTICE_MS = 6000;
+
+function handleUiRequest(request: ExtensionUiRequest): void {
+  switch (request.method) {
+    case 'select':
+    case 'confirm':
+    case 'input':
+    case 'editor':
+      setUiState({ ...uiState, dialogs: [...uiState.dialogs, request] });
+      return;
+    case 'notify': {
+      const id = request.id;
+      setUiState({
+        ...uiState,
+        notices: [...uiState.notices, { id, message: String(request.message ?? ''), type: request.notifyType }],
+      });
+      setTimeout(
+        () => setUiState({ ...uiState, notices: uiState.notices.filter((n) => n.id !== id) }),
+        NOTICE_MS,
+      );
+      return;
+    }
+    default:
+      // setTitle / setStatus / setWidget / set_editor_text have no home in a
+      // VS Code webview yet (and the tab title belongs to the conversation, not
+      // to an extension). Ignoring them is what RPC mode does for the ones that
+      // need a terminal.
+      return;
+  }
+}
+
+function answerDialog(
+  request: ExtensionUiRequest,
+  response: Omit<ExtensionUiResponse, 'type' | 'id' | 'sessionId'>,
+): void {
+  setUiState({ ...uiState, dialogs: uiState.dialogs.filter((d) => d.id !== request.id) });
+  sendToPi({ type: 'extension_ui_response', id: request.id, sessionId: activeSessionId, ...response });
+}
+
+/** A cancelled turn must answer outstanding requests with `cancelled`. */
+function cancelPendingDialogs(): void {
+  if (!uiState.dialogs.length) return;
+  for (const dialog of uiState.dialogs) {
+    sendToPi({ type: 'extension_ui_response', id: dialog.id, sessionId: activeSessionId, cancelled: true });
+  }
+  setUiState({ ...uiState, dialogs: [] });
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +478,9 @@ const PiAdapter: ChatModelAdapter = {
           notify();
           break;
         }
-        case 'settled':
+        // pi's own "the turn is over" event. The host only synthesises one
+        // when pi never got that far (a prompt that failed to start).
+        case 'agent_settled':
           settled = true;
           notify();
           break;
@@ -399,6 +499,9 @@ const PiAdapter: ChatModelAdapter = {
     // some unrelated event arrived.
     const onAbort = () => {
       sendToPi({ type: 'abort', sessionId: activeSessionId });
+      // A cancelled turn must not leave an extension waiting on a dialog
+      // nobody is going to answer.
+      cancelPendingDialogs();
       notify();
     };
     abortSignal.addEventListener('abort', onAbort);
@@ -893,6 +996,37 @@ const styles: Record<string, React.CSSProperties> = {
   assistant: { alignSelf: 'stretch', background: '#18181b', border: '1px solid #27272a', whiteSpace: 'normal', minWidth: 0, maxWidth: '100%' },
   composer: { padding: '12px 32px 16px', borderTop: '1px solid #27272a', display: 'flex', alignItems: 'center', gap: 8 },
   connecting: { color: '#8b8b94', fontFamily: Mono, fontSize: 12, padding: 24 },
+  dialog: {
+    // Floating and fixed: a dialog can arrive before the thread has hydrated
+    // (an extension asking at session start), and it must be answerable then —
+    // a dialog the user cannot see is a blocked extension.
+    position: 'fixed', left: '50%', transform: 'translateX(-50%)', bottom: 72,
+    width: 'min(640px, calc(100vw - 32px))', zIndex: 20,
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
+    padding: '10px 12px',
+    background: '#1c1c22', border: '1px solid #3f3f46', borderRadius: 8,
+    color: '#e4e4e7', fontSize: 12.5, lineHeight: 1.5, minWidth: 0,
+  },
+  dialogTitle: { color: '#fafafa', fontFamily: Mono, fontSize: 12, marginBottom: 6 },
+  dialogActions: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  dialogButton: {
+    background: '#2f2f35', border: '1px solid #3f3f46', borderRadius: 6,
+    color: '#e4e4e7', cursor: 'pointer', font: 'inherit', padding: '4px 10px',
+  },
+  dialogInput: {
+    width: '100%', background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6,
+    color: '#fafafa', padding: '6px 8px', font: 'inherit', outline: 'none',
+    fontFamily: Mono, fontSize: 12, resize: 'vertical',
+  },
+  notices: {
+    // Top-right so they never sit on the dialog, which owns the bottom middle.
+    position: 'fixed', right: 16, top: 16, zIndex: 20,
+    display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end',
+  },
+  notice: {
+    background: '#1c1c22', border: '1px solid #3f3f46', borderRadius: 6,
+    padding: '6px 10px', fontSize: 12, color: '#e4e4e7', maxWidth: 360,
+  },
   errorBanner: {
     display: 'flex', alignItems: 'flex-start', gap: 10,
     margin: '0 32px 4px', padding: '8px 12px',
@@ -922,6 +1056,105 @@ const ErrorBanner = () => {
       <button type="button" className="canvas-link" onClick={() => setError(null)} title="Dismiss">
         dismiss
       </button>
+    </div>
+  );
+};
+
+/**
+ * Renders the oldest outstanding extension dialog. A dialog belongs to the
+ * extension that raised it, not to a turn, so it is not cleared when the agent
+ * settles — only on an answer, or on cancellation.
+ */
+const DialogHost = () => {
+  const { dialogs } = React.useSyncExternalStore(subscribeUi, getUiState);
+  const request = dialogs[0];
+  const [text, setText] = React.useState('');
+  // Re-seed whenever a different dialog becomes the visible one.
+  React.useEffect(() => { setText(request?.prefill ?? ''); }, [request?.id]);
+  if (!request) return null;
+
+  const answer = (response: Omit<ExtensionUiResponse, 'type' | 'id' | 'sessionId'>) => answerDialog(request, response);
+  const cancel = () => answer({ cancelled: true });
+
+  return (
+    <div style={styles.dialog} role="dialog" aria-label="Extension request">
+      {request.title && <div style={styles.dialogTitle}>{request.title}</div>}
+      {request.method === 'confirm' && <div>{request.message}</div>}
+      {request.method === 'select' && (
+        <div style={styles.dialogActions}>
+          {(request.options ?? []).map((option) => (
+            <button key={option} type="button" style={styles.dialogButton} onClick={() => answer({ value: option })}>
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+      {(request.method === 'input' || request.method === 'editor') && (
+        request.method === 'editor' ? (
+          <textarea
+            rows={6}
+            autoFocus
+            style={styles.dialogInput}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') cancel();
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) answer({ value: text });
+            }}
+          />
+        ) : (
+          <input
+            type="text"
+            autoFocus
+            placeholder={request.placeholder}
+            style={styles.dialogInput}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') cancel();
+              if (e.key === 'Enter') answer({ value: text });
+            }}
+          />
+        )
+      )}
+      <div style={styles.dialogActions}>
+        {/* select answers by picking an option; the rest need an explicit submit. */}
+        {request.method !== 'select' && request.method !== 'confirm' && (
+          <button type="button" style={styles.dialogButton} onClick={() => answer({ value: text })}>
+            {request.method === 'editor' ? 'Save' : 'OK'}
+          </button>
+        )}
+        {request.method === 'confirm' && (
+          <button type="button" style={styles.dialogButton} onClick={() => answer({ confirmed: true })}>
+            Confirm
+          </button>
+        )}
+        <button type="button" style={styles.dialogButton} onClick={cancel}>
+          {request.method === 'confirm' ? 'Reject' : 'Cancel'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/** Fire-and-forget extension notifications (`ctx.ui.notify`). */
+const NoticeStack = () => {
+  const { notices } = React.useSyncExternalStore(subscribeUi, getUiState);
+  if (!notices.length) return null;
+  return (
+    <div style={styles.notices}>
+      {notices.map((notice) => (
+        <div
+          key={notice.id}
+          style={{
+            ...styles.notice,
+            ...(notice.type === 'error' ? { borderColor: '#7f1d1d', color: '#fecaca' } : null),
+            ...(notice.type === 'warning' ? { borderColor: '#78350f', color: '#fde68a' } : null),
+          }}
+        >
+          {notice.message}
+        </div>
+      ))}
     </div>
   );
 };
@@ -1032,6 +1265,22 @@ function App() {
         setError(explainError(String(event.error ?? 'unknown error')));
         return;
       }
+      if (event.type === 'response' && event.success === false) {
+        setError(explainError(String(event.error ?? 'unknown error')));
+        return;
+      }
+      if (event.type === 'server_ready' && event.protocol !== undefined && event.protocol !== PROTOCOL_VERSION) {
+        // A stale webview or a stale host reads commands it does not know.
+        // Saying so beats rendering an agent that silently never answers.
+        setError(
+          `The canvas UI (protocol ${PROTOCOL_VERSION}) and the agent host (protocol ${event.protocol}) disagree. Reload the window.`,
+        );
+        return;
+      }
+      if (event.type === 'extension_ui_request') {
+        handleUiRequest(event as ExtensionUiRequest);
+        return;
+      }
       if (event.type === 'message_update' || event.type === 'tool_execution_start' || event.type === 'session_opened') {
         setError(null);
       }
@@ -1050,6 +1299,10 @@ function App() {
   return (
     <CanvasErrorContext.Provider value={{ error, setError }}>
       {initial === null ? <Connecting /> : <CanvasRuntime initialMessages={initial} />}
+      {/* Outside the hydration branch on purpose: a dialog raised while the
+          canvas is still connecting still has to be answerable. */}
+      <DialogHost />
+      <NoticeStack />
     </CanvasErrorContext.Provider>
   );
 }
