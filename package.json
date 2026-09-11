@@ -2,7 +2,7 @@
   "name": "pi-agent-canvas",
   "displayName": "Pi Agent Canvas",
   "description": "A dedicated cockpit for the pi coding agent: conversations as editor tiles, files it touches opening in the editor, and a session list in the activity bar.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "rajdeepyadav004",
   "license": "MIT",
   "engines": {
@@ -111,13 +111,13 @@
         "piCanvas.agentCommand": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Command used to start the agent server. Leave empty for the built-in one (`node <extension>/scripts/pi-server.mjs`). Set it when the agent needs a particular environment \u2014 a login shell, a specific Node.js, or a wrapper that exports credentials.\n\nThe command runs through your login shell from `piCanvas.agentCwd`. These are already in its environment: `PI_CANVAS_PORT`, `PI_CANVAS_CWD`, `PI_CANVAS_SERVER` (absolute path to the bundled server) and `PI_CANVAS_EXTENSION`, so a wrapper can `exec node \"$PI_CANVAS_SERVER\"` after setting things up.",
+          "markdownDescription": "**The command used to start the agent server.** Empty means the built-in one (`node <extension>/scripts/pi-server.mjs`). Set it when the agent needs a particular environment \u2014 a login shell, a specific Node.js, or a wrapper that exports credentials.\n\nIt runs through your shell from `piCanvas.agentCwd`. Already in its environment: `PI_CANVAS_PORT`, `PI_CANVAS_CWD`, `PI_CANVAS_SERVER` (absolute path to the bundled server) and `PI_CANVAS_EXTENSION`, so a wrapper can `exec node \"$PI_CANVAS_SERVER\"`.\n\nNot to be confused with `piCanvas.agentCwd`, which is a directory.\n\nExample: `\"bash -lc 'exec node \\\"$PI_CANVAS_SERVER\\\"'\"`",
           "scope": "window"
         },
         "piCanvas.agentCwd": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Directory the agent works in. Empty means the first workspace folder. pi finds its project context (AGENTS.md), its extensions and its session store relative to this directory, so if the agent only behaves correctly in one repository, point this at it. `~` is expanded.",
+          "markdownDescription": "**The directory the agent works in.** Empty means the first workspace folder. pi finds its project context (AGENTS.md), its extensions and its session store relative to this directory, so if the agent only behaves correctly in one repository, point this at it. `~` is expanded.\n\nNot to be confused with `piCanvas.agentCommand`, which is the command used to start the server.\n\nExample: `\"/Users/me/work/agent-sandbox\"`",
           "scope": "window"
         }
       }

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { get } from 'node:http';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -251,12 +251,69 @@ function freePort(): Promise<number> {
  * because VS Code patches fetch/http there and SSE streaming stalls. Spawned
  * detached (own session) so it survives window reloads.
  */
-/** The configured directory the agent works in, or the workspace folder. */
-function agentCwd(): string | undefined {
-  const configured = (vscode.workspace.getConfiguration().get<string>(AGENT_CWD_SETTING) ?? '').trim();
-  if (!configured) return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  const expanded = configured.startsWith('~') ? join(homedir(), configured.slice(1)) : configured;
+function expandPath(value: string): string {
+  const expanded = value.startsWith('~') ? join(homedir(), value.slice(1)) : value;
   return isAbsolute(expanded) ? expanded : join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? homedir(), expanded);
+}
+
+/**
+ * What a settings value actually looks like on disk.
+ *
+ * The two launch settings are easy to swap — `agentCwd` and `agentCommand` read
+ * alike — and the failure that produced was `spawn /bin/sh ENOENT` with the real
+ * cause (a cwd that does not exist) buried a line above. Classifying the values
+ * lets us say "that looks like the other setting" instead.
+ */
+function classify(value: string): 'directory' | 'file' | 'command' | 'unknown' {
+  const path = expandPath(value);
+  if (existsSync(path)) {
+    try {
+      return statSync(path).isDirectory() ? 'directory' : 'file';
+    } catch { /* fall through */ }
+  }
+  // Not something that exists: shell syntax means it is meant as a command.
+  return /[;&|$'"`()]|\s/.test(value) ? 'command' : 'unknown';
+}
+
+interface Launch {
+  /** undefined = the built-in launch. */
+  command?: string;
+  /** undefined = the extension folder. */
+  cwd?: string;
+  problems: string[];
+}
+
+/** Resolve both launch settings, refusing anything that cannot work. */
+function resolveLaunch(): Launch {
+  const config = vscode.workspace.getConfiguration();
+  const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const rawCwd = (config.get<string>(AGENT_CWD_SETTING) ?? '').trim();
+  const rawCommand = (config.get<string>(AGENT_COMMAND_SETTING) ?? '').trim();
+  const problems: string[] = [];
+
+  let cwd = workspaceCwd;
+  if (rawCwd) {
+    const kind = classify(rawCwd);
+    if (kind === 'directory') {
+      cwd = expandPath(rawCwd);
+    } else if (kind === 'command') {
+      problems.push(`${AGENT_CWD_SETTING} looks like a shell command, not a directory: "${rawCwd}" — did you mean ${AGENT_COMMAND_SETTING}?`);
+    } else {
+      problems.push(`${AGENT_CWD_SETTING} is not an existing directory: "${rawCwd}"`);
+    }
+  }
+
+  let command: string | undefined;
+  if (rawCommand) {
+    const kind = classify(rawCommand);
+    if (kind === 'directory') {
+      problems.push(`${AGENT_COMMAND_SETTING} is a directory, not a command: "${rawCommand}" — did you mean ${AGENT_CWD_SETTING}?`);
+    } else {
+      command = rawCommand;
+    }
+  }
+
+  return { command, cwd, problems };
 }
 
 let restartTimer: ReturnType<typeof setTimeout> | undefined;
@@ -287,12 +344,13 @@ function startPiServer(): void {
   // inherited from this process's environment (see scripts/pi-server.mjs);
   // sessions otherwise live in pi's own session directory, so the canvas and
   // `pi --continue` agree.
-  const workspaceCwd = agentCwd();
-  if (workspaceCwd && !existsSync(workspaceCwd)) {
-    log(`configured ${AGENT_CWD_SETTING} does not exist: ${workspaceCwd}`);
-    void vscode.window.showWarningMessage(
-      `Pi Agent Canvas: ${AGENT_CWD_SETTING} points at a directory that does not exist (${workspaceCwd}).`,
-    );
+  const launch = resolveLaunch();
+  const workspaceCwd = launch.cwd;
+  for (const problem of launch.problems) log(`launch setting problem: ${problem}`);
+  if (launch.problems.length) {
+    void vscode.window
+      .showWarningMessage(`Pi Agent Canvas: ${launch.problems.join(' ')}`, 'Show Log')
+      .then((choice) => { if (choice === 'Show Log') showLog(); });
   }
 
   const env = {
@@ -305,15 +363,28 @@ function startPiServer(): void {
     ...(workspaceCwd ? { PI_CANVAS_CWD: workspaceCwd } : {}),
   };
 
-  const custom = (vscode.workspace.getConfiguration().get<string>(AGENT_COMMAND_SETTING) ?? '').trim();
-  log(custom ? `starting agent server with ${AGENT_COMMAND_SETTING}: ${custom}` : `starting agent server: node ${serverPath}`);
+  const custom = launch.command;
+  // Log the decision explicitly: when a launch fails, which command ran in which
+  // directory is the first thing worth knowing.
+  log(
+    custom
+      ? `starting agent server with ${AGENT_COMMAND_SETTING}: ${custom}`
+      : `starting agent server: node ${serverPath}${launch.problems.length ? ' (built-in launch, because the configured one is unusable)' : ''}`,
+  );
   log(`  port ${PI_PORT} · cwd ${workspaceCwd ?? '(none — the extension folder)'} · node ${process.version}`);
   log(`  PATH ${process.env.PATH ?? '(unset)'}`);
+  // A child process inherits VS Code's proxy environment, so an unreachable
+  // provider often shows up here and nowhere else.
+  for (const key of ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'no_proxy']) {
+    if (process.env[key]) log(`  ${key}=${process.env[key]}`);
+  }
 
   const child = custom
     // Through the shell, from the agent's directory: that is what makes "a login
     // shell / a specific node / a wrapper that exports credentials" possible.
     ? spawn(custom, {
+        // `workspaceCwd` is already validated by resolveLaunch; a missing
+        // directory here would surface as 'spawn /bin/sh ENOENT'.
         cwd: workspaceCwd ?? join(__dirname, '..'),
         env,
         shell: true,

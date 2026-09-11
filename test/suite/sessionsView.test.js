@@ -208,6 +208,38 @@ suite('pi-agent-canvas sessions view', function () {
     await waitFor(async () => { await api.sessions(); return true; }, 40_000, 'the default server to answer again');
   });
 
+  it('refuses swapped launch settings instead of failing obscurely', async function () {
+    // Reported from a real machine: agentCwd was given the command and
+    // agentCommand the directory. That produced 'spawn /bin/sh ENOENT' with the
+    // cause buried in another log line, so it is detected and named now.
+    const dir = join(tmpdir(), `pi-canvas-swap-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const config = vscode.workspace.getConfiguration('piCanvas');
+    try {
+      await config.update('agentCwd', 'source ./activate && exec node "$PI_CANVAS_SERVER"', vscode.ConfigurationTarget.Global);
+      await config.update('agentCommand', dir, vscode.ConfigurationTarget.Global);
+
+      await waitFor(
+        () => api.recentLogs().some((l) => l.includes('looks like a shell command')),
+        30_000,
+        'the swapped settings to be called out',
+      );
+      const logs = api.recentLogs().join('\n');
+      assert.ok(/looks like a shell command, not a directory/.test(logs), `expected a swap hint for agentCwd:\n${logs}`);
+      assert.ok(/is a directory, not a command/.test(logs), `expected a swap hint for agentCommand:\n${logs}`);
+
+      // …and the agent still comes up, on the built-in launch.
+      await waitFor(async () => { await api.sessions(); return true; }, 40_000, 'the fallback launch to answer');
+      assert.ok(
+        api.recentLogs().some((l) => l.includes('built-in launch, because the configured one is unusable')),
+        'the log should say it fell back',
+      );
+    } finally {
+      await config.update('agentCommand', undefined, vscode.ConfigurationTarget.Global);
+      await config.update('agentCwd', undefined, vscode.ConfigurationTarget.Global);
+    }
+  });
+
   it('gives a new session its own panel', async () => {
     const before = canvasTabs().length;
     await vscode.commands.executeCommand('piAgentCanvas.newSession');

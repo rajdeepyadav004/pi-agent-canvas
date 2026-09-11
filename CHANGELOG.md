@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-09-11
+
+### Fixed
+
+- **A swap between the two launch settings is named instead of producing
+  `spawn /bin/sh ENOENT`.** Reported from a real machine: `piCanvas.agentCwd`
+  held the command and `piCanvas.agentCommand` held the directory. The bad
+  directory was passed to the spawned process, so the failure surfaced as an
+  error about `/bin/sh` with the cause buried a line above. Values are now
+  classified (directory / file / command) before use, each setting says which
+  of the two it is in its description, and the log records the launch decision.
+- A launch setting that cannot work no longer leaves the canvas without an
+  agent: the built-in launch is used, and both the log and a notification say
+  why.
+
 ## [0.2.0] — 2026-09-10
 
 ### Added
@@ -68,6 +83,7 @@ Fixes the reason "the agent isn't replying" gave you nothing to go on.
 [0.1.1]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.1.1
 [0.1.2]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.1.2
 [0.2.0]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.2.0
+[0.2.1]: https://github.com/rajdeepyadav004/pi-agent-canvas/releases/tag/v0.2.1
 
 ## [0.1.0] — 2026-09-10
 
